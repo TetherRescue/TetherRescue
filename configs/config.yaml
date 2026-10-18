@@ -1,0 +1,4 @@
+# Global configuration
+seed: 1004
+unity_env:
+  time_scale: 1.0

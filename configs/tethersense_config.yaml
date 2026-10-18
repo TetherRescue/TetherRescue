@@ -1,0 +1,5 @@
+model:
+  type: 1d_cnn
+  input_channels: 5
+  num_classes: 3
+learning_rate: 0.001
