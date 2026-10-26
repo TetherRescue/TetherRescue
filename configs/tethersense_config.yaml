@@ -1,5 +1,8 @@
 model:
   type: 1d_cnn
-  input_channels: 5
+  input_channels: 6  # tension, accel_x/y/z, thrust_cmd, steer_cmd (SRS 5.1)
   num_classes: 3
+window:
+  size: 100  # 2s @ 50Hz
+  hop: 10
 learning_rate: 0.001

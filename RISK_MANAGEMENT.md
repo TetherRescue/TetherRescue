@@ -1,9 +1,21 @@
 # 🛡️ TetherRescue Risk Management Matrix
 
-| 리스크 항목 | 영향도 | 발생 가능성 | 예방 및 사전 조치 | 비상 대응책 (Plan B / Fallback) |
-| :--- | :---: | :---: | :--- | :--- |
-| **1. Unity-Python ONNX 실시간 연동 미세 병목** | High | Medium | • TetherSense 추론 주기를 RL 제어 주기와 분리 ($2 \sim 5\text{Hz}$ 차등화)<br>• Sliding Window 메모리 재할당 최소화 | • ONNX Runtime 통신을 C# Sentis 패키지 대신 간이 Socket/gRPC 백그라운드 프로세스로 분리 구동 |
-| **2. PanicSim PPO 강화학습 수렴 실패** | High | Medium | • 보상 함수 단계별 커리큘럼 학습 적용<br>• 헤드리스 다중 환경 수 확충 | • 규칙 기반(FSM/APF) 접근 알고리즘으로 즉시 교체하여 베이스라인 확보 |
-| **3. TetherSense Synthetic Data 과적합** | Medium | High | • 파도, 수중 마찰, 익수자 질량 $\pm 20\%$ Domain Randomization 적용 | • 1D CNN/LSTM 구조를 초소형 모델로 다이어트하고 L2 Regularization 및 Dropout 적용 |
-| **4. 통신 지연 / 서버 응답 타임아웃 ($>200\text{ms}$)** | High | Low | • C# 연동부에 $200\text{ms}$ 타임아웃 타이머 설정 | • **NFR-ERR-05 Fallback 적용:** 이전 상태 유지하며 로봇 속도 $50\%$ 즉시 감속 안전모드 전환 |
-| **5. 일정 지연** | High | Low | • 1주차 `mock_data_generator.py`로 의존성 원천 차단 | • TetherSense 통합이 지연될 경우, PanicSim + AirwayTow 2개 모듈로 마일스톤 데모 마감 |
+> 기준 문서: 노션 「03. 개발 환경 & 실행 가이드」 5장. 내용을 바꿀 때는 노션과 함께 수정합니다.
+
+| 리스크 | 영향 | 가능성 | 예방 | 비상 대응 (Plan B) | 책임 |
+| :--- | :---: | :---: | :--- | :--- | :---: |
+| **PPO 학습 수렴 실패** | 높음 | 중간 | 보상 점검, 커리큘럼 학습, 평가 시드 고정 | M1 미달 시 규칙 기반(FSM/APF) 접근을 주 정책으로 사용 | 가영 |
+| **물리 튜닝 지연** (부력·조인트 불안정) | 높음 | 중간 | 2-body 익수자 모델, 1단계에 물리 v0 확정 | 파고·항력 파라미터 축소, 고정 시나리오로 진행 | 미현 |
+| **Unity 추론 병목·프레임 드롭** | 높음 | 중간 | 5Hz 추론, 윈도우 버퍼 재사용, 프로파일링 | 추론 주기 축소 + 안전 모드 | 채연 · 동경 |
+| **ONNX 로드·추론 실패** | 높음 | 중간 | opset 15 고정, 입출력 shape 테스트, Python ↔ Unity parity test | 모델 비활성화 후 규칙 기반 감지 + 안전 모드 | 채연 |
+| **시뮬 데이터 과적합** | 중간 | 높음 | Domain Randomization(±20%), 시드 기준 test 분리 | 모델 축소, Dropout·L2 | 채연 |
+| **Unity·Python 버전 불일치** | 높음 | 중간 | Unity 6 + `com.unity.ml-agents` 4.0.x + `mlagents==1.1.0` 고정, Unity 패치 버전 통일 | 검증된 조합으로 환경 복원 | 동경 |
+| **Unity 씬·프리팹 병합 충돌** | 중간 | 높음 | 씬 소유자 지정, 개인 Sandbox 씬 사용 | 소유자 버전 채택 후 재작업 | 전원 |
+| **팀 학습 곡선·일정 지연** | 높음 | 중간 | 1주 단위 작은 작업, 매주 리뷰, 설 연휴 버퍼 주간 | 예비 기간(3/8~3/23) 사용, TetherSense 지연 시 PanicSim + AirwayTow로 데모 | 동경 |
+
+## 안전 모드 운용 (SRS NFR-ERR-06)
+
+- 추론 예외, 모델 로드 실패, 또는 최신 추론 결과가 **500ms 이상** 갱신되지 않으면 SAFE 모드(목표 속도 50%)로 전환합니다.
+- 이전 상태를 무기한 신뢰하지 않으며, 정상 추론 결과 3회 연속이면 복귀합니다.
+- 우선순위: **정지(DETACHED) > SAFE > 감속(UNRESPONSIVE) > 정상**. DETACHED는 항상 즉시 정지합니다.
+- 진입·복귀 이벤트를 로그에 기록합니다.

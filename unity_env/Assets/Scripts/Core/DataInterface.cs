@@ -1,1 +1,1 @@
-// Data Interfaces (WickerState, TetherData)
+// Data Interfaces (TetherData, RescueeStatus, TetherSenseOutput)

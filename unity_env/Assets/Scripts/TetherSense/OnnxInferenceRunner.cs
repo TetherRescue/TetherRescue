@@ -1,1 +1,1 @@
-// ONNX Inference Runner (2-5Hz)
+// ONNX Inference Runner (5Hz)

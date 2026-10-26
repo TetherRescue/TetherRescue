@@ -1,4 +1,6 @@
 # Global configuration
 seed: 1004
+seeds: [1004, 2024, 3000]
 unity_env:
   time_scale: 1.0
+  fixed_timestep: 0.02  # 50Hz

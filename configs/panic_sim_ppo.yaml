@@ -1,5 +1,5 @@
 behaviors:
-  PanicSim:
+  Rescuer:
     trainer_type: ppo
     hyperparameters:
       batch_size: 64

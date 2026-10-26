@@ -1,10 +1,28 @@
+# Python
 __pycache__/
 *.pyc
 .venv/
 venv/
+.ipynb_checkpoints/
+
+# Data & experiment outputs
 data/raw/*
 data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
-*.onnx
+results/
+checkpoints/
+
+# Unity
+unity_env/[Ll]ibrary/
+unity_env/[Tt]emp/
+unity_env/[Ll]ogs/
+unity_env/[Uu]ser[Ss]ettings/
+unity_env/[Oo]bj/
+unity_env/[Bb]uilds/
+unity_env/*.csproj
+unity_env/*.sln
+
+# OS
 .DS_Store
+*:Zone.Identifier
