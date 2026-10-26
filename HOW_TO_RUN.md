@@ -14,7 +14,8 @@
 -   Conda 환경: `tether_rescue`
 -   Python 3.10.x
 -   프로젝트 의존성 설치 완료
--   Unity 6 LTS (6000.0.x), 프로젝트 폴더: `unity_env/`
+-   Unity 6 LTS (6000.0.x), 프로젝트 폴더: `unity_env/` (Unity 작업은 동경 전담.
+    다른 팀원은 `Builds/Linux/` 헤드리스 빌드를 Python으로 실행)
 -   Unity 설정: Visible Meta Files, Force Text, Fixed Timestep 0.02 (50Hz)
 -   필요한 설정 파일 및 스크립트가 저장소에 존재하는지 확인
 

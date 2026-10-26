@@ -13,12 +13,14 @@
 
 ## 👥 2. 팀원 구성 및 역할 (Team R&R)
 
-| 구분 | 팀원 | 담당 모듈 | 핵심 역할 |
+| 구분 | 팀원 | 담당 | 핵심 역할 |
 | :--- | :--- | :--- | :--- |
-| **A1** | 가영 | **PanicSim** (Python/RL) | PPO 학습 설정, 보상 함수, 커리큘럼, mock 데이터·시드·평가 스크립트 |
-| **A2** | 동경 (팀장) | **PanicSim** (Unity) + **통합** | 익수자 FSM, RL Agent, 직선 접근 베이스라인, 데이터 인터페이스, 로깅, 대시보드 |
-| **B** | 미현 | **AirwayTow** + 물리 환경 | 수면·파도·부력, Tether 조인트, 기도 센서, PID 견인, Composite Cost, 파레토 |
-| **C** | 채연 | **TetherSense** | 데이터셋·1D CNN·학습, ONNX 변환, Unity 추론, 놓침 감지, 되먹임 정책 |
+| **A** | 가영 | **PanicSim** (Python) + 파이썬 베이스라인 | 보상 수식, PPO 설정·학습 실행, 커리큘럼, 평가, 공용 도구(mock·시드·평가·env_wrapper·그래프) |
+| **A · Unity** | 동경 (팀장) | **PanicSim**(고난도) + **Unity 전담** + 통합 | Agent 설계, PPO 튜닝 주도, 모든 Unity C#(물리·Agent·추론 연동·되먹임·대시보드), 헤드리스 빌드, 데모 |
+| **B** | 미현 | **AirwayTow** (Python) | PID 1D 시뮬·튜닝, 로프·기도 파라미터, Composite Cost, 파레토, 견인 실험 분석 |
+| **C** | 채연 | **TetherSense** (Python) + 문서 검토 | 데이터셋·1D CNN·학습, ONNX·테스트 벡터, 규칙 감지·되먹임 정책 로직, DR 설계 |
+
+> Unity(C#)는 동경이 전담합니다. 나머지 팀원은 Python으로 로직·파라미터를 먼저 검증해 넘기고, 실험은 헤드리스 빌드를 Python으로 실행합니다.
 
 - **개발 환경:** Unity 6 + Python (PyTorch, ONNX, ML-Agents) (실물 로봇 없음, 저사양 PC 전제)
 
@@ -85,6 +87,7 @@ TetherRescue/
 ├── tethersense/
 │   ├── dataset.py
 │   ├── export_onnx.py
+│   ├── feedback_policy.py
 │   ├── models.py
 │   ├── rule_detector.py
 │   └── train_tethersense.py
