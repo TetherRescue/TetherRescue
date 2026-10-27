@@ -3,7 +3,7 @@
 이 문서는 TetherRescue 프로젝트의 Python 학습 파이프라인과 Unity
 시뮬레이션을 실행하는 순서를 설명합니다.
 
-> **버전 고정:** Unity 6 LTS (6000.0.x) + `com.unity.ml-agents` 4.0.x +
+> **버전 고정:** Unity 6.3 LTS (6000.3.x) + `com.unity.ml-agents` 4.0.x +
 > Python `mlagents==1.1.0` 조합을 사용합니다. Unity 2022.3은 사용하지
 > 않습니다. 팀 전원이 같은 Unity 패치 버전을 씁니다.
 > [공식 설치 가이드](https://unity-technologies.github.io/ml-agents/Installation/)
@@ -14,7 +14,7 @@
 -   Conda 환경: `tether_rescue`
 -   Python 3.10.x
 -   프로젝트 의존성 설치 완료
--   Unity 6 LTS (6000.0.x), 프로젝트 폴더: `unity_env/` (Unity 작업은 동경 전담.
+-   Unity 6.3 LTS (6000.3.x), 프로젝트 폴더: `unity_env/` (Unity 작업은 동경 전담.
     다른 팀원은 `Builds/Linux/` 헤드리스 빌드를 Python으로 실행)
 -   Unity 설정: Visible Meta Files, Force Text, Fixed Timestep 0.02 (50Hz)
 -   필요한 설정 파일 및 스크립트가 저장소에 존재하는지 확인

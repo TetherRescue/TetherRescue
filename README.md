@@ -22,7 +22,7 @@
 
 > Unity(C#)는 동경이 전담합니다. 나머지 팀원은 Python으로 로직·파라미터를 먼저 검증해 넘기고, 실험은 헤드리스 빌드를 Python으로 실행합니다.
 
-- **개발 환경:** Unity 6 + Python (PyTorch, ONNX, ML-Agents) (실물 로봇 없음, 저사양 PC 전제)
+- **개발 환경:** Unity 6.3 LTS + Python (PyTorch, ONNX, ML-Agents) (실물 로봇 없음, 저사양 PC 전제)
 
 ---
 
@@ -58,7 +58,7 @@
 ## 🛠️ 4. 기술 스택 (Tech Stack)
 - **OS:** Windows + WSL2 Ubuntu 24.04
 - **Python:** 3.10.12
-- **Frameworks & ML:** PyTorch 2.1.2, Unity 6 LTS (6000.0.x) + `com.unity.ml-agents` 4.0.x, ML-Agents (Python) 1.1.0, ONNX 1.15.0, ONNX Runtime 1.14.1
+- **Frameworks & ML:** PyTorch 2.1.2, Unity 6.3 LTS (6000.3.x) + `com.unity.ml-agents` 4.0.x, ML-Agents (Python) 1.1.0, ONNX 1.15.0, ONNX Runtime 1.14.1
 - **데이터 처리 및 시각화:** NumPy, pandas, scikit-learn, Matplotlib, Seaborn
 
 ---

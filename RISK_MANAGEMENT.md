@@ -9,7 +9,7 @@
 | **Unity 추론 병목·프레임 드롭** | 높음 | 중간 | 5Hz 추론, 윈도우 버퍼 재사용, 프로파일링 | 추론 주기 축소 + 안전 모드 | 동경 |
 | **ONNX 로드·추론 실패** | 높음 | 중간 | opset 15 고정, 입출력 shape 테스트, Python ↔ Unity parity test | 모델 비활성화 후 규칙 기반 감지 + 안전 모드 | 채연 · 동경 |
 | **시뮬 데이터 과적합** | 중간 | 높음 | Domain Randomization(±20%), 시드 기준 test 분리 | 모델 축소, Dropout·L2 | 채연 |
-| **Unity·Python 버전 불일치** | 높음 | 중간 | Unity 6 + `com.unity.ml-agents` 4.0.x + `mlagents==1.1.0` 고정, Unity 패치 버전 통일 | 검증된 조합으로 환경 복원 | 동경 |
+| **Unity·Python 버전 불일치** | 높음 | 중간 | Unity 6.3 LTS (6000.3.x) + `com.unity.ml-agents` 4.0.x + `mlagents==1.1.0` 고정, Unity 패치 버전 통일 | 검증된 조합으로 환경 복원 | 동경 |
 | **Unity 씬·프리팹 병합 충돌** | 중간 | 높음 | 씬 소유자 지정, 개인 Sandbox 씬 사용 | 소유자 버전 채택 후 재작업 | 동경 |
 | **Unity 작업 집중 (동경 병목)** | 높음 | 높음 | Python 담당이 로직·파라미터·테스트 벡터를 먼저 확정, 동경은 이식만 | 대시보드 축소, 예비 기간 사용 | 동경 |
 | **팀 학습 곡선·일정 지연** | 높음 | 중간 | 1주 단위 작은 작업, 매주 리뷰, 설 연휴 버퍼 주간 | 예비 기간(3/8~3/23) 사용, TetherSense 지연 시 PanicSim + AirwayTow로 데모 | 동경 |
