@@ -35,7 +35,7 @@ mlagents-learn --help
 핵심 라이브러리 import 및 버전을 확인합니다.
 
 ``` bash
-python -c "import torch, onnx, onnxruntime, numpy, mlagents; print('torch:', torch.__version__); print('onnx:', onnx.__version__); print('onnxruntime:', onnxruntime.__version__); print('numpy:', numpy.__version__); print('ML-Agents import OK')"
+python -c "import torch, onnx, onnxruntime, numpy, mlagents, gymnasium, stable_baselines3; print('torch:', torch.__version__); print('onnx:', onnx.__version__); print('onnxruntime:', onnxruntime.__version__); print('numpy:', numpy.__version__); print('gymnasium:', gymnasium.__version__); print('sb3:', stable_baselines3.__version__); print('ML-Agents import OK')"
 ```
 
 `mlagents-learn --help`가 실행되고 `pip check`에서 의존성 충돌이 없어야
@@ -97,6 +97,22 @@ mlagents-learn configs/panic_sim_ppo.yaml --run-id=PanicSim_v1 --env=PATH_TO_UNI
 
 학습 산출물은 일반적으로 `results/PanicSim_v1/` 아래에 저장됩니다. 실제
 경로는 실행 로그와 설정을 기준으로 확인하세요.
+
+### 4.3 TowAgent · FeedbackAgent (Python 먼저 → Unity 이식)
+
+B(미현)·C(채연) 에이전트는 Unity 없이 Python Gymnasium 환경에서 먼저
+설계·학습합니다(Stable-Baselines3 PPO). 환경 파일은
+`airwaytow/tow_env.py`, `tethersense/feedback_env.py`이며 각각 PID,
+규칙 기반 되먹임 베이스라인과 같은 시드로 비교합니다.
+
+관측·행동·보상이 확정되면 동경이 `TowAgent.cs`, `FeedbackAgent.cs`로
+이식하고, Unity 학습은 PanicSim과 같은 방식으로 실행합니다. Behavior
+Name은 각각 `Tow`, `Feedback`입니다.
+
+``` bash
+mlagents-learn configs/airway_tow_ppo.yaml --run-id=Tow_v1 --env=PATH_TO_UNITY_BUILD --no-graphics
+mlagents-learn configs/feedback_ppo.yaml --run-id=Feedback_v1 --env=PATH_TO_UNITY_BUILD --no-graphics
+```
 
 ## 5. TetherSense --- 모델 학습 및 ONNX 내보내기
 
@@ -199,7 +215,7 @@ mlagents-learn --help
 
 ``` bash
 python -m pip check
-python -m pip show mlagents mlagents-envs torch onnx onnxruntime grpcio setuptools
+python -m pip show mlagents mlagents-envs torch onnx onnxruntime grpcio setuptools gymnasium stable-baselines3
 ```
 
 출력된 버전을 확인하고 `requirements.txt`와 실제 환경을 함께 조정합니다.

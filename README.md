@@ -15,12 +15,20 @@
 
 | 구분 | 팀원 | 담당 | 핵심 역할 |
 | :--- | :--- | :--- | :--- |
-| **A** | 가영 | **PanicSim** (Python) + 파이썬 베이스라인 | 보상 수식, PPO 설정·학습 실행, 커리큘럼, 평가, 공용 도구(mock·시드·평가·env_wrapper·그래프) |
-| **A · Unity** | 동경 (팀장) | **PanicSim**(고난도) + **Unity 전담** + 통합 | Agent 설계, PPO 튜닝 주도, 모든 Unity C#(물리·Agent·추론 연동·되먹임·대시보드), 헤드리스 빌드, 데모 |
-| **B** | 미현 | **AirwayTow** (Python) | PID 1D 시뮬·튜닝, 로프·기도 파라미터, Composite Cost, 파레토, 견인 실험 분석 |
-| **C** | 채연 | **TetherSense** (Python) + 문서 검토 | 데이터셋·1D CNN·학습, ONNX·테스트 벡터, 규칙 감지·되먹임 정책 로직, DR 설계 |
+| **A** | 가영 | **PanicSim** (Python) + 파이썬 베이스라인 | **RescuerAgent** 보상 수식, PPO 설정·학습 실행, 커리큘럼, 평가, 공용 도구(mock·시드·평가·env_wrapper·그래프) |
+| **A · Unity** | 동경 (팀장) | **PanicSim**(고난도) + **Unity 전담** + 통합 | RescuerAgent 설계, PPO 튜닝 주도, 모든 Unity C#(물리·Agent 3종 이식·추론 연동·되먹임·대시보드), 헤드리스 빌드, 데모 |
+| **B** | 미현 | **AirwayTow** (Python) | **TowAgent** 설계·Python 학습, PID 1D 시뮬·튜닝(베이스라인), 로프·기도 파라미터, Composite Cost, 파레토, 견인 실험 분석 |
+| **C** | 채연 | **TetherSense** (Python) + 문서 검토 | **FeedbackAgent** 설계·Python 학습, 데이터셋·1D CNN·학습, ONNX·테스트 벡터, 규칙 감지·규칙 기반 되먹임(베이스라인), DR 설계 |
 
 > Unity(C#)는 동경이 전담합니다. 나머지 팀원은 Python으로 로직·파라미터를 먼저 검증해 넘기고, 실험은 헤드리스 빌드를 Python으로 실행합니다.
+>
+> **파트별 에이전트:** 각 파트는 RL 에이전트 1개와 비교용 베이스라인을 가집니다. B·C 에이전트는 담당자가 Python Gymnasium 환경에서 먼저 설계·학습(Stable-Baselines3 PPO)하고, 검증된 관측·행동·보상을 동경이 Unity ML-Agents로 이식합니다.
+>
+> | 파트 | 에이전트 | 베이스라인 | 관측 → 행동 (초안) |
+> | :--- | :--- | :--- | :--- |
+> | A PanicSim | `RescuerAgent` | `StraightApproachBaseline` (직진 접근) | 익수자 위치·패닉 정도 → 추진·조향 |
+> | B AirwayTow | `TowAgent` | PID `TowController` | 기도 높이·로프 장력·파도 → 견인 속도·방향 |
+> | C TetherSense | `FeedbackAgent` | 규칙 기반 `FeedbackPolicy` | 상태 추정 결과·신뢰도 → 유지 / 감속 / 정지·재접근 |
 
 - **개발 환경:** Unity 6.3 LTS + Python (PyTorch, ONNX, ML-Agents) (실물 로봇 없음, 저사양 PC 전제)
 
@@ -28,23 +36,23 @@
 
 ## 🧩 3. 핵심 모듈 구조 (Core Modules)
 
-1. **PanicSim:** 패닉 행동을 가진 익수자 에이전트와 로봇이 안전하게 접근·접촉하도록 학습하는 RL 정책 (Unity ML-Agents Python SDK)
-2. **AirwayTow:** 견인 중 익수자의 머리(기도) 수면 유지를 최적화하는 견인 제어 (NumPy / SciPy / RL)
-3. **TetherSense:** 견인 로프의 장력 시계열 신호로 익수자 상태(매달림 / 놓침 / 의식 저하 추정)를 분류하는 모델 (PyTorch → ONNX 변환 및 실시간 추론)
+1. **PanicSim:** 패닉 행동을 가진 익수자(FSM)에게 로봇이 안전하게 접근·접촉하도록 학습하는 RL 에이전트 `RescuerAgent` (Unity ML-Agents)
+2. **AirwayTow:** 견인 중 익수자의 머리(기도) 수면 유지를 최적화하는 RL 견인 에이전트 `TowAgent`, PID 베이스라인과 비교 (Gymnasium + SB3 → Unity ML-Agents)
+3. **TetherSense:** 견인 로프의 장력 시계열 신호로 익수자 상태(매달림 / 놓침 / 의식 저하 추정)를 분류하는 모델 (PyTorch → ONNX 변환 및 실시간 추론) + 추정 결과로 대응을 고르는 RL 에이전트 `FeedbackAgent`, 규칙 기반 정책과 비교
 
 ### 3.1 전체 파이프라인 흐름
 ```text
 [접근] PanicSim ── RescuerAgent(PPO, 25Hz) ↔ RescueeFSM
           │ 접촉 완료 → phase = TOW
           ▼
-[견인] AirwayTow ── TowController(PID) + Tether 조인트(스프링-댐퍼)
+[견인] AirwayTow ── TowAgent(PPO) | 베이스라인 TowController(PID) + Tether 조인트(스프링-댐퍼)
           │ TetherData 50Hz
           ▼
 [추정] TetherSense ── ① 규칙 기반 놓침 감지 (50Hz)
           │           ② 1D CNN 추론 (5Hz, 2초 슬라이딩 윈도우)
           ▼
-[되먹임] FeedbackPolicy ── 유지 / 감속 / 정지·재접근
-          + InferenceWatchdog (추론 이상 시 안전 모드)
+[되먹임] FeedbackAgent(PPO) | 베이스라인 FeedbackPolicy(규칙) ── 유지 / 감속 / 정지·재접근
+          + 안전망: 규칙 놓침 감지·InferenceWatchdog가 에이전트 결정을 덮어씀
 ```
 
 ### 3.2 데이터 인터페이스 표준 규격
@@ -58,7 +66,7 @@
 ## 🛠️ 4. 기술 스택 (Tech Stack)
 - **OS:** Windows + WSL2 Ubuntu 24.04
 - **Python:** 3.10.12
-- **Frameworks & ML:** PyTorch 2.1.2, Unity 6.3 LTS (6000.3.x) + `com.unity.ml-agents` 4.0.x, ML-Agents (Python) 1.1.0, ONNX 1.15.0, ONNX Runtime 1.14.1
+- **Frameworks & ML:** PyTorch 2.1.2, Unity 6.3 LTS (6000.3.x) + `com.unity.ml-agents` 4.0.x, ML-Agents (Python) 1.1.0, Gymnasium 0.29.1, Stable-Baselines3 2.4.1, ONNX 1.15.0, ONNX Runtime 1.14.1
 - **데이터 처리 및 시각화:** NumPy, pandas, scikit-learn, Matplotlib, Seaborn
 
 ---
@@ -71,7 +79,9 @@ TetherRescue/
 │   └── interfaces.py
 ├── configs/
 │   ├── config.yaml
-│   ├── panic_sim_ppo.yaml
+│   ├── panic_sim_ppo.yaml      # RescuerAgent
+│   ├── airway_tow_ppo.yaml     # TowAgent (Unity)
+│   ├── feedback_ppo.yaml       # FeedbackAgent (Unity)
 │   └── tethersense_config.yaml
 ├── data/{raw,processed}/    # git 제외
 ├── notebooks/
@@ -83,10 +93,12 @@ TetherRescue/
 ├── airwaytow/
 │   ├── composite_cost.py
 │   ├── pareto.py
-│   └── pid_controller.py
+│   ├── pid_controller.py
+│   └── tow_env.py           # TowAgent Python 학습 환경
 ├── tethersense/
 │   ├── dataset.py
 │   ├── export_onnx.py
+│   ├── feedback_env.py      # FeedbackAgent Python 학습 환경
 │   ├── feedback_policy.py
 │   ├── models.py
 │   ├── rule_detector.py
@@ -104,8 +116,8 @@ TetherRescue/
 │       ├── Core/            # DataInterface, TelemetryLogger, PhaseManager, InferenceWatchdog
 │       ├── Environment/     # WaveField, Buoyancy, RobotController
 │       ├── PanicSim/        # RescueeFSM, RescuerAgent, RescueReward, StraightApproachBaseline
-│       ├── AirwayTow/       # TetherJointPhysics, AirwaySensor, TowController
-│       ├── TetherSense/     # OnnxInferenceRunner, SlidingWindowBuffer, DetachRuleDetector, FeedbackPolicy
+│       ├── AirwayTow/       # TetherJointPhysics, AirwaySensor, TowController, TowAgent
+│       ├── TetherSense/     # OnnxInferenceRunner, SlidingWindowBuffer, DetachRuleDetector, FeedbackPolicy, FeedbackAgent
 │       └── UI/              # CommandDashboardUI
 ├── HOW_TO_RUN.md
 ├── README.md
@@ -134,6 +146,7 @@ TetherRescue/
 - **견인 단계:** 머리 수면 위 시간 비율($T_{sub}$), 평균 견인 속도, 로프 최대 장력, Composite Cost 점수
 - **상태 추정:** Accuracy, 클래스별 Recall (특히 '놓침' 상태), 상태 전이 지연 시간
 - **통합 성능:** 되먹임 적용 전후 성공률 변화, 환경 난이도별 성능 저하 곡선
+- **에이전트 vs 베이스라인:** 파트별로 같은 시드·시나리오에서 에이전트와 베이스라인(직진 접근 / PID / 규칙 기반 되먹임)을 위 지표로 비교
 
 ---
 

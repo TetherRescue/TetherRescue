@@ -25,3 +25,9 @@ pydantic==2.5.3
 protobuf==3.20.3
 grpcio==1.48.2
 tensorboard==2.14.1
+
+# Python-side agent prototyping (AirwayTow TowAgent, TetherSense FeedbackAgent)
+# Verified with uv resolver: adds only these + farama-notifications, no existing pin changes.
+# stable-baselines3>=2.5 requires newer torch, so keep 2.4.1.
+gymnasium==0.29.1
+stable-baselines3==2.4.1

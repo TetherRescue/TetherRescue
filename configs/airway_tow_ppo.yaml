@@ -1,0 +1,6 @@
+behaviors:
+  Tow:
+    trainer_type: ppo
+    hyperparameters:
+      batch_size: 64
+      buffer_size: 2048
