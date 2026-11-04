@@ -23,6 +23,13 @@ unity_env/[Bb]uilds/
 unity_env/*.csproj
 unity_env/*.sln
 
+# ROS2
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+*.mcap
+*.db3
+
 # OS
 .DS_Store
 *:Zone.Identifier
