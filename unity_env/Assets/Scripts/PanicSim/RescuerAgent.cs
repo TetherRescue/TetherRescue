@@ -1,1 +1,0 @@
-// Rescuer Agent (ML-Agents)
