@@ -23,12 +23,13 @@ class World:
     acc: ForceAccumulator
 
 
-def _positive(value, name):
+def _positive(value, name, *, allow_zero=False):
     if value is None:
         raise ValueError(f"{name}이 미확정입니다. config를 채우거나 인자로 명시하세요.")
     value = float(value)
-    if not math.isfinite(value) or value <= 0:
-        raise ValueError(f"{name}은 유한한 양수여야 합니다.")
+    if not math.isfinite(value) or value < 0 or (value == 0 and not allow_zero):
+        requirement = "0 이상의 유한한 값" if allow_zero else "유한한 양수"
+        raise ValueError(f"{name}은 {requirement}이어야 합니다.")
     return value
 
 
@@ -37,13 +38,14 @@ def build_world(*, parts=None, timestep=None, gravity=None, integrator=None):
 
     인자를 생략하면 config의 계약값을 사용한다. 아직 None인 값은 임의로
     확정하지 않고 오류를 낸다. 실험 시에만 명시적 인자로 임시값을 전달한다.
+    gravity=0은 중력 없는 독립 힘 실험에 사용할 수 있다 (공통 config는 유지).
     parts 생략 시 물·로봇·줄·사람의 현재 구현을 조립한다.
     """
     timestep = _positive(
         config.Sim.TIMESTEP if timestep is None else timestep, "Sim.TIMESTEP"
     )
     gravity = _positive(
-        config.Physics.GRAVITY if gravity is None else gravity, "Physics.GRAVITY"
+        config.Physics.GRAVITY if gravity is None else gravity, "Physics.GRAVITY", allow_zero=True
     )
     integrator = config.Sim.INTEGRATOR if integrator is None else integrator
     if integrator not in ("Euler", "RK4", "implicit", "implicitfast"):
@@ -59,8 +61,10 @@ def build_world(*, parts=None, timestep=None, gravity=None, integrator=None):
         from sim.robot import Robot
         from sim.tether import Tether
         from sim.human import Human
+        from sim.lifebuoy import Lifebuoy
 
-        parts = (Water(), Robot(), Tether(), Human())
+        # 실제 로봇 연결점·연결 시점 합의 전에는 기본 세계에 줄을 생성하지 않는다.
+        parts = (Water(), Robot(), Human(), Lifebuoy(), Tether(enabled=False))
     parts = tuple(parts)
     for part in parts:
         max_dt = part.REQUIRES.get("max_dt")

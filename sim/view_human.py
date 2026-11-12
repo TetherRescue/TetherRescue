@@ -1,4 +1,4 @@
-"""사람 강체의 자유낙하 데모: python -m sim.view_human.
+"""사람·구명환 고정 연결의 자유낙하 데모: python -m sim.view_human.
 
 화면을 위한 독립 실행 예제다. 실제 구조 단계 제어는 PhaseManager의 담당이다.
 """
@@ -10,6 +10,7 @@ import mujoco
 import numpy as np
 
 from sim.human import Human
+from sim.lifebuoy import Lifebuoy
 from sim.world import build_world
 
 
@@ -29,22 +30,31 @@ def advance(world):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--headless", action="store_true", help="창 없이 데모 실행을 검사")
+    parser.add_argument("--human-only", action="store_true", help="구명환 없이 사람만 표시")
     args = parser.parse_args()
-    world = build_world(parts=[Human()])
+    parts = [Human()] if args.human_only else [Human(), Lifebuoy()]
+    world = build_world(parts=parts)
     if args.headless:
-        for _ in range(1000):
-            advance(world)
-            if not all(np.isfinite(state).all() for state in (world.data.qpos, world.data.qvel)):
-                raise RuntimeError("데모의 위치·속도에 비정상 값이 발생했습니다.")
-        print("사람 데모: 1000스텝 정상 실행 (1초마다 초기 위치로 복귀)")
+        run_headless(world)
         return
+    run_viewer(world)
 
+
+def run_headless(world):
+    for _ in range(1000):
+        advance(world)
+        if not all(np.isfinite(state).all() for state in (world.data.qpos, world.data.qvel)):
+            raise RuntimeError("데모의 위치·속도에 비정상 값이 발생했습니다.")
+    print("데모: 1000스텝 정상 실행 (1초마다 초기 위치로 복귀)")
+
+
+def run_viewer(world, *, lookat=(0, 0, -1.5), distance=8):
     import mujoco.viewer
 
     with mujoco.viewer.launch_passive(world.model, world.data) as viewer:
-        viewer.cam.lookat[:] = (0, 0, -1.5)
-        viewer.cam.distance = 8
-        viewer.cam.azimuth = 90
+        viewer.cam.lookat[:] = lookat
+        viewer.cam.distance = distance
+        viewer.cam.azimuth = 145
         viewer.cam.elevation = -15
         # 렌더링 주기 약 60Hz, 물리 연산은 계약의 timestep(현재 500Hz)을 유지한다.
         target_time = 0.0

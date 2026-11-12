@@ -17,7 +17,7 @@ def test_default_world_includes_human():
 
 
 def test_build_and_bind_preserve_mass_shape_and_free_joint():
-    human = Human(position=(2, 3, 4))
+    human = Human(position=(2, 3, 4), shape="box")
     world = build_world(parts=[human])
     model = world.model
     assert model.nbody == 2  # 월드와 사람
@@ -53,7 +53,7 @@ def test_human_falls_under_gravity_for_thousand_steps():
 
 def test_com_is_read_from_config(monkeypatch):
     monkeypatch.setattr(config.Human, "COM", (0.1, 0, 0))
-    human = Human(position=(2, 3, 4))
+    human = Human(position=(2, 3, 4), shape="box")
     world = build_world(parts=[human])
     np.testing.assert_allclose(world.data.xipos[human.body_id], [2.1, 3, 4])
 
@@ -67,4 +67,31 @@ def test_bind_fails_if_human_is_missing():
 def test_invalid_physical_parameters_fail_before_compile(monkeypatch, name, value):
     monkeypatch.setattr(config.Human, name, value)
     with pytest.raises(ValueError):
+        build_world(parts=[Human(shape="box")])
+
+
+def test_humanoid_has_six_fixed_parts_and_total_mass_seventy():
+    human = Human()
+    world = build_world(parts=[human])
+    model = world.model
+    assert len(human.geom_ids) == model.ngeom == 6
+    assert model.nbody == 2 and model.nv == 6  # 팔다리 개별 운동 관절은 아직 없음
+    assert model.body_mass[human.body_id] == pytest.approx(70)
+    assert model.body_subtreemass[human.body_id] == pytest.approx(70)
+    assert np.all(model.body_inertia[human.body_id] > 0)
+    np.testing.assert_allclose(model.body_ipos[human.body_id], [0.0229, 0, 0], atol=1e-10)
+    for geom_id in human.geom_ids.values():
+        assert model.geom_bodyid[geom_id] == human.body_id
+
+
+def test_humanoid_uses_total_mass_from_config(monkeypatch):
+    monkeypatch.setattr(config.Human, "MASS", 80)
+    world = build_world(parts=[Human()])
+    assert world.model.body(config.Names.HUMAN_BODY).mass[0] == pytest.approx(80)
+
+
+@pytest.mark.parametrize("fractions", [(1, 1, 1, 1, 1, 1), (0.5, 0.5), (0, 0.2, 0.2, 0.2, 0.2, 0.2)])
+def test_humanoid_rejects_invalid_mass_distribution(monkeypatch, fractions):
+    monkeypatch.setattr(config.Human, "MASS_FRACTIONS", fractions)
+    with pytest.raises(ValueError, match="MASS_FRACTIONS"):
         build_world(parts=[Human()])
