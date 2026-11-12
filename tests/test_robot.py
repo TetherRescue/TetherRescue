@@ -8,6 +8,7 @@ import pytest
 
 from sim import config, frames
 from sim.config import Hull, Names, Thruster
+from sim.forces import ForceAccumulator
 from sim.robot import Robot
 
 
@@ -97,28 +98,6 @@ def test_bind_fails_when_mass_changed():
 
 
 # ── add_forces ──────────────────────────────────────────────
-class _TempAcc:
-    """테스트용 임시 ForceAccumulator (가영 님 forces.py 가 생기면 그걸로 교체).
-
-    add 로 모은 힘을 apply 에서 mj_applyFT 로 qfrc_applied 에 씀. 점에 건 힘의 돌림힘은 mj_applyFT 가 계산.
-    """
-    def __init__(self):
-        self.items = []
-
-    def reset(self):
-        self.items = []
-
-    def add(self, body_id, force_w, torque_w=None, point_w=None):
-        self.items.append((body_id, np.asarray(force_w, float), torque_w, point_w))
-
-    def apply(self, model, data):
-        data.qfrc_applied[:] = 0
-        for body_id, force_w, torque_w, point_w in self.items:
-            torque = np.zeros(3) if torque_w is None else np.asarray(torque_w, float)
-            point = data.xipos[body_id] if point_w is None else np.asarray(point_w, float)
-            mujoco.mj_applyFT(model, data, force_w, torque, point, body_id, data.qfrc_applied)
-
-
 def _robot_world(yaw_deg=0.0):
     """물 없이 로봇만, 중력 끔 (물이 없으면 배가 떨어지니까 수평 움직임만 봄)."""
     spec = mujoco.MjSpec()
@@ -136,7 +115,7 @@ def _robot_world(yaw_deg=0.0):
 
 
 def _run(model, data, robot, seconds):
-    acc = _TempAcc()
+    acc = ForceAccumulator()
     for _ in range(round(seconds / model.opt.timestep)):
         acc.reset()
         robot.add_forces(model, data, acc)
