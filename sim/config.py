@@ -122,24 +122,40 @@ class Hull:
 # ─────────────────────────────────────────────────────────────
 # 4. 추진기 — 로봇
 # ─────────────────────────────────────────────────────────────
+# 결정: 2026-11-12 동경 (로봇 내부 값이라 물과 합의 불필요. 명령 형식 CMD_RANGE 만 태수와 맞춤)
 class Thruster:
+    # 선택지 (METHOD)
+    ACC = "acc"             # ForceAccumulator.add(..., point_w=추진기 위치)
+    ACTUATOR = "actuator"   # MuJoCo motor → data.ctrl (PoC 방식). 쓰면 계약의 예외로 적어 둬야 함
     # 무엇: 추력을 시뮬레이터에 넣는 방법.
-    #   "acc"      = ForceAccumulator.add(..., point_w=추진기 위치) — 노션 계약 "모든 힘은 ForceAccumulator"
-    #   "actuator" = MuJoCo motor → data.ctrl (PoC 방식). 쓰면 계약의 예외로 적어 둬야 함
     # 사용: 로봇
-    METHOD = None
-    # 무엇: 추진 명령의 범위. PoC: [-1, 1] (−1 최대 후진, 0 정지, +1 최대 전진)
+    # 이유: 노션 06 계약 "모든 힘은 ForceAccumulator" 와 같고, 힘 장부에 추력도 출처별로 기록돼 디버깅이 쉬움
+    METHOD = ACC
+    # 무엇: 추진 명령의 범위 = 리모컨 스틱. (−1 최대 후진, 0 정지, +1 최대 전진)
     # 사용: 로봇(명령 → 힘 변환), 태수 PhaseManager(명령을 보내는 쪽)
-    CMD_RANGE = None
-    # 무엇: 추진기 1대의 최대 전진 / 최대 후진 추력 [N]. 명령 +1 / −1 일 때의 힘
+    # 이유: PoC 방식. 강화학습 라이브러리(SB3)도 −1~+1 을 기본으로 씀. 보내는 쪽은 힘 단위(N)를 몰라도 됨
+    CMD_RANGE = (-1.0, 1.0)
+    # 무엇: 추진기 1대의 최대 전진 / 최대 후진 추력 [N]. 명령 +1 / −1 일 때의 힘 (2대 합쳐 전진 600 N)
     # 사용: 로봇
-    MAX_FORWARD = None
-    MAX_REVERSE = None
-    # 무엇: 방향을 바꾸는 방식. PoC: 좌우 추력 차이 (differential thrust, 별도 키 없음)
+    # 이유: PoC 값. 후진이 절반인 건 실제 프로펠러가 역회전 때 효율이 떨어지기 때문.
+    #       최고 속도 어림(계산만, 검증 아님): 미현 저항값 기준 약 4.3 m/s, PoC 저항값 기준 약 2.9 m/s
+    MAX_FORWARD = 300.0
+    MAX_REVERSE = 150.0
+    # 무엇: 방향을 바꾸는 방식. "differential" = 좌우 추력 차이 (탱크처럼, 별도 키 없음)
+    #   왼쪽 = 전진 − 조향, 오른쪽 = 전진 + 조향  (조향 > 0 → 왼쪽으로 돎)
     # 사용: 로봇
-    STEERING = None
+    # 이유: PoC 방식. 러더·선외기 회전이 필요 없어 단순 (그래서 Hull.OUTBOARD_SEPARATE = False)
+    STEERING = "differential"
+    # 무엇: 좌·우 추진기 위치 [m], 몸체 좌표(FLU, 선체 중심 기준). Names.THRUSTER_L/R_SITE 가 이 자리에 놓인다.
+    #   x −1.15 = 선미(배 끝 −1.2)에서 5 cm 안쪽, y ±0.35 = 좌(+)·우(−) 대칭, z −0.2 = 선체 바닥
+    #   바닥에 두는 이유: 흘수 0.10 m 라 수면은 중심 기준 약 −0.10 m. 바닥이면 잔잔한 물에서 항상 잠김
+    # 사용: 로봇 build(site 위치), add_forces(추력 작용점)
+    # 이유: PoC boat_scene.xml 값. 좌우 간격(0.7 m)이 넓을수록 같은 추력 차이로 더 잘 돈다
+    POS_L_B = (-1.15, 0.35, -0.2)
+    POS_R_B = (-1.15, -0.35, -0.2)
     # 무엇: 프로펠러가 이 깊이 [m] 이상 잠겨야 추력 100%. 파도로 물 밖에 나오면 추력이 줄어든다.
-    # 사용: 로봇. 물의 수면 높이 함수가 필요함 (WaterAPI 참고). 1주차에 넣을지 합의
+    # 사용: 로봇. 물의 수면 높이 함수가 필요함 (WaterAPI 참고)
+    # 결정: 비워 둠. WaterAPI.USE_IN_WEEK1 = False 라 1주차엔 안 씀. 연동할 때 정함 (PoC: 0.08 m)
     FULL_THRUST_DEPTH = None
 
 
@@ -424,6 +440,32 @@ def _check_water_robot():
         owner = getattr(Owner, name)
         if owner is not None and owner not in (Owner.WATER, Owner.ROBOT):
             raise ValueError(f"Owner.{name} 은 Owner.WATER 또는 Owner.ROBOT 이어야 함 (지금 {owner!r}).")
+
+    # 추진기: 넣는 방법은 정해진 선택지만, 명령 범위는 (작은 값, 큰 값), 최대 추력은 양수
+    if Thruster.METHOD is not None and Thruster.METHOD not in (Thruster.ACC, Thruster.ACTUATOR):
+        raise ValueError(
+            f"Thruster.METHOD 는 Thruster.ACC 또는 Thruster.ACTUATOR 여야 함 (지금 {Thruster.METHOD!r})."
+        )
+    if Thruster.CMD_RANGE is not None and not Thruster.CMD_RANGE[0] < Thruster.CMD_RANGE[1]:
+        raise ValueError(f"Thruster.CMD_RANGE 는 (작은 값, 큰 값) 이어야 함 (지금 {Thruster.CMD_RANGE}).")
+    for name in ("MAX_FORWARD", "MAX_REVERSE"):
+        value = getattr(Thruster, name)
+        if value is not None and value <= 0:
+            raise ValueError(f"Thruster.{name} 은 0 보다 커야 함 (지금 {value}). 후진도 크기만 양수로 적음.")
+    # 추진기 위치: 선체 상자 안(표면 포함), 왼쪽은 y>0 · 오른쪽은 y<0 (FLU 에서 왼쪽이 +y)
+    half = None if None in (Hull.LENGTH, Hull.BEAM, Hull.HEIGHT) else (Hull.LENGTH / 2, Hull.BEAM / 2, Hull.HEIGHT / 2)
+    for name in ("POS_L_B", "POS_R_B"):
+        pos = getattr(Thruster, name)
+        if pos is None:
+            continue
+        if len(pos) != 3:
+            raise ValueError(f"Thruster.{name} 은 (x, y, z) 3개여야 함 (지금 {pos}).")
+        if half is not None and any(abs(p) > h for p, h in zip(pos, half)):
+            raise ValueError(f"Thruster.{name} {pos} 가 선체 상자(±{half}) 밖에 있음.")
+    if Thruster.POS_L_B is not None and Thruster.POS_L_B[1] <= 0:
+        raise ValueError(f"왼쪽 추진기 y 는 양수여야 함 (FLU, 지금 {Thruster.POS_L_B[1]}).")
+    if Thruster.POS_R_B is not None and Thruster.POS_R_B[1] >= 0:
+        raise ValueError(f"오른쪽 추진기 y 는 음수여야 함 (FLU, 지금 {Thruster.POS_R_B[1]}).")
 
     # 중력은 채워졌다면 양수 (부호는 아래 방향으로 water.py 가 처리)
     if Physics.GRAVITY is not None and Physics.GRAVITY <= 0:
