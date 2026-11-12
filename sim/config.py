@@ -33,7 +33,7 @@ class Names:
     # 사용: 배를 특정 위치·방향에 놓거나 리셋할 때 (로봇 방향 테스트, 태수 reset, 채연 표류 테스트)
     BOAT_FREE = "boat_free"
     # 무엇: 부력 계산에 쓰는 선체 상자 모양의 이름. 화면에 보이는 겉모양 geom 과는 별개.
-    # 사용: 물 — 이 상자 크기를 읽어 복셀(Water.VOXEL_RES 칸)로 자르고 잠긴 부피를 더한다
+    # 사용: 물 — 이 상자 크기를 읽어 복셀(WaterParams.VOXEL_RES 칸)로 자르고 잠긴 부피를 더한다
     HULL_GEOM = "hull"
     # 무엇: 좌·우 추진기(프로펠러) 위치를 표시한 점(site).
     # 사용: 로봇 — 추력을 거는 작용점, 프로펠러가 물에 잠겼는지 보는 점
@@ -164,7 +164,9 @@ class Physics:
 # ─────────────────────────────────────────────────────────────
 # 물 밀도와 중력은 여기서 따로 만들지 않고 Physics.RHO_WATER, Physics.GRAVITY 를 쓴다.
 # (같은 값을 두 곳에 적으면 한쪽만 바뀌는 사고가 나기 쉬움)
-class Water:
+# 이름이 WaterParams 인 이유: sim/water.py 의 Water(물 모듈 본체)와 헷갈리지 않게.
+#   config.WaterParams = 물의 "설정값 묶음", water.Water = 그 값을 읽어 실제로 힘을 계산하는 모듈.
+class WaterParams:
     # 파도가 없을 때 수면의 높이 [m]. 월드 z=0 이 수면.                     [미현 / 제안]
     SURFACE_Z = 0.0
 
@@ -209,7 +211,17 @@ class Water:
     # PoC 에서는 이 값을 작게 잡았다가 파도와 박자가 맞아 출렁임이 계속 커졌음(공진). [미현 / 제안]
     HEAVE_DAMPING_RATIO = 0.3
     # 회전 저항: 배가 기울거나 도는 것을 막는 힘. 순서: (roll 좌우 기울기, pitch 앞뒤 기울기, yaw 방향 돌기)
-    ROT_DRAG_LINEAR = (8.0, 8.0, 6.0)                                       # [미현 / 제안] 회전 속도에 비례
+    # 좌우·앞뒤 기울기(roll·pitch)는 위아래 출렁임처럼 "감쇠비"로 정하고, 계수는 water.py 가 계산한다.
+    #   계산식: c = 2 · zeta · sqrt(k · I)
+    #     I = 돌리기 어려운 정도(관성), k = 기울였을 때 되돌아오려는 힘의 세기(복원 강성)
+    #     k = m · g · GM   (GM = 메타센터 높이: 클수록 오뚝이처럼 잘 일어남. 직육면체 공식으로 계산)
+    #   → 배 무게·크기·무게중심이 바뀌어도 "얼마나 빨리 흔들림이 멎는지"는 그대로 유지된다.
+    # 이유: 처음 제안한 숫자(8, 8)는 이 배 기준 감쇠비 약 0.02·0.003 이라 기울면 거의 안 멈췄음
+    #       (동경 님 지적, PoC 롤 300·피치 600). PoC heave 공진과 같은 종류의 문제.  [미현 / 제안]
+    ROT_DAMPING_RATIO = (0.3, 0.3)                                          # [미현 / 제안] (roll, pitch) 감쇠비
+    # 회전 속도에 비례하는 계수 [N·m·s/rad]. roll·pitch 는 위 감쇠비로 자동 계산하므로 None.
+    # yaw(방향 돌기)는 되돌아오려는 힘이 없어 감쇠비를 정의할 수 없음 → 숫자로 둠.  [미현 / 제안]
+    ROT_DRAG_LINEAR = (None, None, 6.0)
     ROT_DRAG_QUAD = (2.0, 2.0, 4.0)                                         # [미현 / 제안] 회전 속도 제곱에 비례
 
     # 부가질량: 배가 가속할 때 주변 물도 같이 밀어야 해서 실제보다 무겁게 느껴지는 효과.
@@ -240,12 +252,14 @@ class Owner:
     # 무엇: 바람 힘(물 위로 나온 선체·콘솔이 받는 힘)을 누가 넣나. PoC 는 로봇(boat.py)이 넣었음
     # 이유: 파도·해류와 같은 환경 힘이라 한 파일에 모음. 바람 받는 면적은 Hull 값에서 읽음. 1주차는 바람 0
     WIND = WATER
-    # 무엇: 해류(물 자체의 흐름)를 누가 넣나. 미현 님 Water.WATER_VELOCITY_W 가 이 자리 (1주차는 0)
+    # 무엇: 해류(물 자체의 흐름)를 누가 넣나. 미현 님 WaterParams.WATER_VELOCITY_W 가 이 자리 (1주차는 0)
     # 이유: 저항 계산("물에 대한 배 속도") 안에 들어가는 값. PoC 도 물(hull.py)이 처리
     CURRENT = WATER
-    # 무엇: 저항 계수 값(Water.DRAG_* 등)을 누가 정하나
+    # 무엇: 저항 계수 값(WaterParams.DRAG_* 등)을 누가 정하나
     # 이유: 계산식이 물 코드에 있으니 계수도 같은 곳에서 관리.
     # ⚠️ 회전 저항(ROT_DRAG_*)이 PoC 보다 수십 배 작음 (PoC 롤 300·피치 600 vs 8·8) — 흔들림 테스트로 확인할 것
+    #    → 반영: roll·pitch 를 감쇠비(WaterParams.ROT_DAMPING_RATIO = 0.3)로 바꿈. 계산값 롤 약 124·피치 약 708.
+    #      흔들림이 멎는지는 tests/test_water.py 에서 확인 (미현)
     DRAG_COEFFS = WATER
 
 
@@ -280,7 +294,7 @@ class Sim:
     # 합의: 2026-11-12 회의 — 0.002 s (500 Hz).
     # 이유: PoC 에서 실제로 돌려 안정적이었던 값. 노션 초안 0.004 s(250 Hz)는 이 배 모델로 돌려 본 적 없음.
     #       채연 속도 측정(bench_speed.py) 후 0.004 s 로 올려도 안정적인지 확인하면 그때 올린다
-    #       (올릴 때는 Water.REQUIRES["max_dt"] 도 같이 올려야 world.py 검사를 통과).
+    #       (올릴 때는 WaterParams.REQUIRES["max_dt"] 도 같이 올려야 world.py 검사를 통과).
     # 결정은 가영(world.py)·태수(단계 전환)에게 공유할 것.
     TIMESTEP = 0.002
     # 무엇: 시뮬레이터가 다음 칸을 계산하는 방법.
@@ -371,25 +385,30 @@ def _check_water_robot():
 
     # 저항 계수는 (앞뒤, 좌우, 위아래) 또는 (roll, pitch, yaw) 세 개씩
     for name in ("DRAG_CD", "DRAG_LINEAR", "ROT_DRAG_LINEAR", "ROT_DRAG_QUAD"):
-        value = getattr(Water, name)
+        value = getattr(WaterParams, name)
         if len(value) != 3:
-            raise ValueError(f"Water.{name} 은 값이 3개여야 함 (지금 {len(value)}개).")
+            raise ValueError(f"WaterParams.{name} 은 값이 3개여야 함 (지금 {len(value)}개).")
 
     # 복셀은 각 방향 최소 1칸
-    if any(n < 1 for n in Water.VOXEL_RES):
-        raise ValueError(f"Water.VOXEL_RES 의 각 값은 1 이상이어야 함 (지금 {Water.VOXEL_RES}).")
+    if any(n < 1 for n in WaterParams.VOXEL_RES):
+        raise ValueError(f"WaterParams.VOXEL_RES 의 각 값은 1 이상이어야 함 (지금 {WaterParams.VOXEL_RES}).")
 
     # 감쇠비는 0 과 1 사이
-    if not 0 < Water.HEAVE_DAMPING_RATIO < 1:
+    if not 0 < WaterParams.HEAVE_DAMPING_RATIO < 1:
         raise ValueError(
-            f"Water.HEAVE_DAMPING_RATIO 는 0 과 1 사이여야 함 (지금 {Water.HEAVE_DAMPING_RATIO})."
+            f"WaterParams.HEAVE_DAMPING_RATIO 는 0 과 1 사이여야 함 (지금 {WaterParams.HEAVE_DAMPING_RATIO})."
+        )
+    if len(WaterParams.ROT_DAMPING_RATIO) != 2 or not all(0 < z < 1 for z in WaterParams.ROT_DAMPING_RATIO):
+        raise ValueError(
+            f"WaterParams.ROT_DAMPING_RATIO 는 (roll, pitch) 2개, 각각 0 과 1 사이여야 함 "
+            f"(지금 {WaterParams.ROT_DAMPING_RATIO})."
         )
 
     # 파도 성분: 진폭·파장은 양수, 너무 가파르면(진폭/파장 ≥ 1/7) 파도가 부서짐(쇄파)
     # → 매끈한 사인파로 계산하는 이 모델이 맞지 않는 범위
     for waves_name in ("WAVES_CALM", "WAVES_DEFAULT"):
-        for i, (amp, length, _direction, _phase) in enumerate(getattr(Water, waves_name)):
-            where = f"Water.{waves_name}[{i}]"
+        for i, (amp, length, _direction, _phase) in enumerate(getattr(WaterParams, waves_name)):
+            where = f"WaterParams.{waves_name}[{i}]"
             if amp <= 0:
                 raise ValueError(f"{where}: 진폭은 0 보다 커야 함 (지금 {amp}).")
             if length <= 0:
