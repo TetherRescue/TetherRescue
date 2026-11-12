@@ -125,6 +125,11 @@ class Hull:
     OUTBOARD_SEPARATE = False
     # 무엇: 선외기 1대(또는 전체) 무게 [kg]. OUTBOARD_SEPARATE = True 일 때만 사용 (지금은 안 씀)
     OUTBOARD_MASS = None
+    # 무엇: 줄(tether)을 묶는 점 위치 [m], 몸체 좌표(FLU). Names.TOW_POINT_SITE 가 이 자리에 놓인다.
+    #   x −1.2 = 선미 끝, z +0.2 = 선체 윗면 (물 밖이라 줄이 프로펠러 쪽으로 덜 감김)
+    # 사용: 로봇 build(site 위치), 가영 tether.py(줄 한쪽 끝)
+    # 이유: PoC boat_scene.xml 값. 선미에서 끌면 배가 사람 쪽으로 머리를 두고 끌고 가기 좋음
+    TOW_POINT_B = (-1.2, 0.0, 0.2)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -513,15 +518,16 @@ def _check_water_robot():
         if value is not None and value <= 0:
             raise ValueError(f"Thruster.{name} 은 0 보다 커야 함 (지금 {value}). 후진도 크기만 양수로 적음.")
     # 추진기 위치: 선체 상자 안(표면 포함), 왼쪽은 y>0 · 오른쪽은 y<0 (FLU 에서 왼쪽이 +y)
+    # 줄 묶는 점도 같은 검사
     half = None if None in (Hull.LENGTH, Hull.BEAM, Hull.HEIGHT) else (Hull.LENGTH / 2, Hull.BEAM / 2, Hull.HEIGHT / 2)
-    for name in ("POS_L_B", "POS_R_B"):
-        pos = getattr(Thruster, name)
+    for owner, name in ((Thruster, "POS_L_B"), (Thruster, "POS_R_B"), (Hull, "TOW_POINT_B")):
+        pos = getattr(owner, name)
         if pos is None:
             continue
         if len(pos) != 3:
-            raise ValueError(f"Thruster.{name} 은 (x, y, z) 3개여야 함 (지금 {pos}).")
+            raise ValueError(f"{owner.__name__}.{name} 은 (x, y, z) 3개여야 함 (지금 {pos}).")
         if half is not None and any(abs(p) > h for p, h in zip(pos, half)):
-            raise ValueError(f"Thruster.{name} {pos} 가 선체 상자(±{half}) 밖에 있음.")
+            raise ValueError(f"{owner.__name__}.{name} {pos} 가 선체 상자(±{half}) 밖에 있음.")
     if Thruster.POS_L_B is not None and Thruster.POS_L_B[1] <= 0:
         raise ValueError(f"왼쪽 추진기 y 는 양수여야 함 (FLU, 지금 {Thruster.POS_L_B[1]}).")
     if Thruster.POS_R_B is not None and Thruster.POS_R_B[1] >= 0:
