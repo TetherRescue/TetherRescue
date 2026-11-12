@@ -33,7 +33,7 @@ class Names:
     # 사용: 배를 특정 위치·방향에 놓거나 리셋할 때 (로봇 방향 테스트, 태수 reset, 채연 표류 테스트)
     BOAT_FREE = "boat_free"
     # 무엇: 부력 계산에 쓰는 선체 상자 모양의 이름. 화면에 보이는 겉모양 geom 과는 별개.
-    # 사용: 물 — 이 상자 크기를 읽어 복셀(Water.VOXEL_RES 칸)로 자르고 잠긴 부피를 더한다
+    # 사용: 물 — 이 상자 크기를 읽어 복셀(WaterParams.VOXEL_RES 칸)로 자르고 잠긴 부피를 더한다
     HULL_GEOM = "hull"
     # 무엇: 좌·우 추진기(프로펠러) 위치를 표시한 점(site).
     # 사용: 로봇 — 추력을 거는 작용점, 프로펠러가 물에 잠겼는지 보는 점
@@ -130,24 +130,40 @@ class Hull:
 # ─────────────────────────────────────────────────────────────
 # 4. 추진기 — 로봇
 # ─────────────────────────────────────────────────────────────
+# 결정: 2026-11-12 동경 (로봇 내부 값이라 물과 합의 불필요. 명령 형식 CMD_RANGE 만 태수와 맞춤)
 class Thruster:
+    # 선택지 (METHOD)
+    ACC = "acc"             # ForceAccumulator.add(..., point_w=추진기 위치)
+    ACTUATOR = "actuator"   # MuJoCo motor → data.ctrl (PoC 방식). 쓰면 계약의 예외로 적어 둬야 함
     # 무엇: 추력을 시뮬레이터에 넣는 방법.
-    #   "acc"      = ForceAccumulator.add(..., point_w=추진기 위치) — 노션 계약 "모든 힘은 ForceAccumulator"
-    #   "actuator" = MuJoCo motor → data.ctrl (PoC 방식). 쓰면 계약의 예외로 적어 둬야 함
     # 사용: 로봇
-    METHOD = None
-    # 무엇: 추진 명령의 범위. PoC: [-1, 1] (−1 최대 후진, 0 정지, +1 최대 전진)
+    # 이유: 노션 06 계약 "모든 힘은 ForceAccumulator" 와 같고, 힘 장부에 추력도 출처별로 기록돼 디버깅이 쉬움
+    METHOD = ACC
+    # 무엇: 추진 명령의 범위 = 리모컨 스틱. (−1 최대 후진, 0 정지, +1 최대 전진)
     # 사용: 로봇(명령 → 힘 변환), 태수 PhaseManager(명령을 보내는 쪽)
-    CMD_RANGE = None
-    # 무엇: 추진기 1대의 최대 전진 / 최대 후진 추력 [N]. 명령 +1 / −1 일 때의 힘
+    # 이유: PoC 방식. 강화학습 라이브러리(SB3)도 −1~+1 을 기본으로 씀. 보내는 쪽은 힘 단위(N)를 몰라도 됨
+    CMD_RANGE = (-1.0, 1.0)
+    # 무엇: 추진기 1대의 최대 전진 / 최대 후진 추력 [N]. 명령 +1 / −1 일 때의 힘 (2대 합쳐 전진 600 N)
     # 사용: 로봇
-    MAX_FORWARD = None
-    MAX_REVERSE = None
-    # 무엇: 방향을 바꾸는 방식. PoC: 좌우 추력 차이 (differential thrust, 별도 키 없음)
+    # 이유: PoC 값. 후진이 절반인 건 실제 프로펠러가 역회전 때 효율이 떨어지기 때문.
+    #       최고 속도 어림(계산만, 검증 아님): 미현 저항값 기준 약 4.3 m/s, PoC 저항값 기준 약 2.9 m/s
+    MAX_FORWARD = 300.0
+    MAX_REVERSE = 150.0
+    # 무엇: 방향을 바꾸는 방식. "differential" = 좌우 추력 차이 (탱크처럼, 별도 키 없음)
+    #   왼쪽 = 전진 − 조향, 오른쪽 = 전진 + 조향  (조향 > 0 → 왼쪽으로 돎)
     # 사용: 로봇
-    STEERING = None
+    # 이유: PoC 방식. 러더·선외기 회전이 필요 없어 단순 (그래서 Hull.OUTBOARD_SEPARATE = False)
+    STEERING = "differential"
+    # 무엇: 좌·우 추진기 위치 [m], 몸체 좌표(FLU, 선체 중심 기준). Names.THRUSTER_L/R_SITE 가 이 자리에 놓인다.
+    #   x −1.15 = 선미(배 끝 −1.2)에서 5 cm 안쪽, y ±0.35 = 좌(+)·우(−) 대칭, z −0.2 = 선체 바닥
+    #   바닥에 두는 이유: 흘수 0.10 m 라 수면은 중심 기준 약 −0.10 m. 바닥이면 잔잔한 물에서 항상 잠김
+    # 사용: 로봇 build(site 위치), add_forces(추력 작용점)
+    # 이유: PoC boat_scene.xml 값. 좌우 간격(0.7 m)이 넓을수록 같은 추력 차이로 더 잘 돈다
+    POS_L_B = (-1.15, 0.35, -0.2)
+    POS_R_B = (-1.15, -0.35, -0.2)
     # 무엇: 프로펠러가 이 깊이 [m] 이상 잠겨야 추력 100%. 파도로 물 밖에 나오면 추력이 줄어든다.
-    # 사용: 로봇. 물의 수면 높이 함수가 필요함 (WaterAPI 참고). 1주차에 넣을지 합의
+    # 사용: 로봇. 물의 수면 높이 함수가 필요함 (WaterAPI 참고)
+    # 결정: 비워 둠. WaterAPI.USE_IN_WEEK1 = False 라 1주차엔 안 씀. 연동할 때 정함 (PoC: 0.08 m)
     FULL_THRUST_DEPTH = None
 
 
@@ -172,7 +188,9 @@ class Physics:
 # ─────────────────────────────────────────────────────────────
 # 물 밀도와 중력은 여기서 따로 만들지 않고 Physics.RHO_WATER, Physics.GRAVITY 를 쓴다.
 # (같은 값을 두 곳에 적으면 한쪽만 바뀌는 사고가 나기 쉬움)
-class Water:
+# 이름이 WaterParams 인 이유: sim/water.py 의 Water(물 모듈 본체)와 헷갈리지 않게.
+#   config.WaterParams = 물의 "설정값 묶음", water.Water = 그 값을 읽어 실제로 힘을 계산하는 모듈.
+class WaterParams:
     # 파도가 없을 때 수면의 높이 [m]. 월드 z=0 이 수면.                     [미현 / 제안]
     SURFACE_Z = 0.0
 
@@ -217,7 +235,17 @@ class Water:
     # PoC 에서는 이 값을 작게 잡았다가 파도와 박자가 맞아 출렁임이 계속 커졌음(공진). [미현 / 제안]
     HEAVE_DAMPING_RATIO = 0.3
     # 회전 저항: 배가 기울거나 도는 것을 막는 힘. 순서: (roll 좌우 기울기, pitch 앞뒤 기울기, yaw 방향 돌기)
-    ROT_DRAG_LINEAR = (8.0, 8.0, 6.0)                                       # [미현 / 제안] 회전 속도에 비례
+    # 좌우·앞뒤 기울기(roll·pitch)는 위아래 출렁임처럼 "감쇠비"로 정하고, 계수는 water.py 가 계산한다.
+    #   계산식: c = 2 · zeta · sqrt(k · I)
+    #     I = 돌리기 어려운 정도(관성), k = 기울였을 때 되돌아오려는 힘의 세기(복원 강성)
+    #     k = m · g · GM   (GM = 메타센터 높이: 클수록 오뚝이처럼 잘 일어남. 직육면체 공식으로 계산)
+    #   → 배 무게·크기·무게중심이 바뀌어도 "얼마나 빨리 흔들림이 멎는지"는 그대로 유지된다.
+    # 이유: 처음 제안한 숫자(8, 8)는 이 배 기준 감쇠비 약 0.02·0.003 이라 기울면 거의 안 멈췄음
+    #       (동경 님 지적, PoC 롤 300·피치 600). PoC heave 공진과 같은 종류의 문제.  [미현 / 제안]
+    ROT_DAMPING_RATIO = (0.3, 0.3)                                          # [미현 / 제안] (roll, pitch) 감쇠비
+    # 회전 속도에 비례하는 계수 [N·m·s/rad]. roll·pitch 는 위 감쇠비로 자동 계산하므로 None.
+    # yaw(방향 돌기)는 되돌아오려는 힘이 없어 감쇠비를 정의할 수 없음 → 숫자로 둠.  [미현 / 제안]
+    ROT_DRAG_LINEAR = (None, None, 6.0)
     ROT_DRAG_QUAD = (2.0, 2.0, 4.0)                                         # [미현 / 제안] 회전 속도 제곱에 비례
 
     # 부가질량: 배가 가속할 때 주변 물도 같이 밀어야 해서 실제보다 무겁게 느껴지는 효과.
@@ -248,12 +276,14 @@ class Owner:
     # 무엇: 바람 힘(물 위로 나온 선체·콘솔이 받는 힘)을 누가 넣나. PoC 는 로봇(boat.py)이 넣었음
     # 이유: 파도·해류와 같은 환경 힘이라 한 파일에 모음. 바람 받는 면적은 Hull 값에서 읽음. 1주차는 바람 0
     WIND = WATER
-    # 무엇: 해류(물 자체의 흐름)를 누가 넣나. 미현 님 Water.WATER_VELOCITY_W 가 이 자리 (1주차는 0)
+    # 무엇: 해류(물 자체의 흐름)를 누가 넣나. 미현 님 WaterParams.WATER_VELOCITY_W 가 이 자리 (1주차는 0)
     # 이유: 저항 계산("물에 대한 배 속도") 안에 들어가는 값. PoC 도 물(hull.py)이 처리
     CURRENT = WATER
-    # 무엇: 저항 계수 값(Water.DRAG_* 등)을 누가 정하나
+    # 무엇: 저항 계수 값(WaterParams.DRAG_* 등)을 누가 정하나
     # 이유: 계산식이 물 코드에 있으니 계수도 같은 곳에서 관리.
     # ⚠️ 회전 저항(ROT_DRAG_*)이 PoC 보다 수십 배 작음 (PoC 롤 300·피치 600 vs 8·8) — 흔들림 테스트로 확인할 것
+    #    → 반영: roll·pitch 를 감쇠비(WaterParams.ROT_DAMPING_RATIO = 0.3)로 바꿈. 계산값 롤 약 124·피치 약 708.
+    #      흔들림이 멎는지는 tests/test_water.py 에서 확인 (미현)
     DRAG_COEFFS = WATER
 
 
@@ -288,7 +318,7 @@ class Sim:
     # 합의: 2026-11-12 회의 — 0.002 s (500 Hz).
     # 이유: PoC 에서 실제로 돌려 안정적이었던 값. 노션 초안 0.004 s(250 Hz)는 이 배 모델로 돌려 본 적 없음.
     #       채연 속도 측정(bench_speed.py) 후 0.004 s 로 올려도 안정적인지 확인하면 그때 올린다
-    #       (올릴 때는 Water.REQUIRES["max_dt"] 도 같이 올려야 world.py 검사를 통과).
+    #       (올릴 때는 WaterParams.REQUIRES["max_dt"] 도 같이 올려야 world.py 검사를 통과).
     # 결정은 가영(world.py)·태수(단계 전환)에게 공유할 것.
     TIMESTEP = 0.002
     # 무엇: 시뮬레이터가 다음 칸을 계산하는 방법.
@@ -431,25 +461,30 @@ def _check_water_robot():
 
     # 저항 계수는 (앞뒤, 좌우, 위아래) 또는 (roll, pitch, yaw) 세 개씩
     for name in ("DRAG_CD", "DRAG_LINEAR", "ROT_DRAG_LINEAR", "ROT_DRAG_QUAD"):
-        value = getattr(Water, name)
+        value = getattr(WaterParams, name)
         if len(value) != 3:
-            raise ValueError(f"Water.{name} 은 값이 3개여야 함 (지금 {len(value)}개).")
+            raise ValueError(f"WaterParams.{name} 은 값이 3개여야 함 (지금 {len(value)}개).")
 
     # 복셀은 각 방향 최소 1칸
-    if any(n < 1 for n in Water.VOXEL_RES):
-        raise ValueError(f"Water.VOXEL_RES 의 각 값은 1 이상이어야 함 (지금 {Water.VOXEL_RES}).")
+    if any(n < 1 for n in WaterParams.VOXEL_RES):
+        raise ValueError(f"WaterParams.VOXEL_RES 의 각 값은 1 이상이어야 함 (지금 {WaterParams.VOXEL_RES}).")
 
     # 감쇠비는 0 과 1 사이
-    if not 0 < Water.HEAVE_DAMPING_RATIO < 1:
+    if not 0 < WaterParams.HEAVE_DAMPING_RATIO < 1:
         raise ValueError(
-            f"Water.HEAVE_DAMPING_RATIO 는 0 과 1 사이여야 함 (지금 {Water.HEAVE_DAMPING_RATIO})."
+            f"WaterParams.HEAVE_DAMPING_RATIO 는 0 과 1 사이여야 함 (지금 {WaterParams.HEAVE_DAMPING_RATIO})."
+        )
+    if len(WaterParams.ROT_DAMPING_RATIO) != 2 or not all(0 < z < 1 for z in WaterParams.ROT_DAMPING_RATIO):
+        raise ValueError(
+            f"WaterParams.ROT_DAMPING_RATIO 는 (roll, pitch) 2개, 각각 0 과 1 사이여야 함 "
+            f"(지금 {WaterParams.ROT_DAMPING_RATIO})."
         )
 
     # 파도 성분: 진폭·파장은 양수, 너무 가파르면(진폭/파장 ≥ 1/7) 파도가 부서짐(쇄파)
     # → 매끈한 사인파로 계산하는 이 모델이 맞지 않는 범위
     for waves_name in ("WAVES_CALM", "WAVES_DEFAULT"):
-        for i, (amp, length, _direction, _phase) in enumerate(getattr(Water, waves_name)):
-            where = f"Water.{waves_name}[{i}]"
+        for i, (amp, length, _direction, _phase) in enumerate(getattr(WaterParams, waves_name)):
+            where = f"WaterParams.{waves_name}[{i}]"
             if amp <= 0:
                 raise ValueError(f"{where}: 진폭은 0 보다 커야 함 (지금 {amp}).")
             if length <= 0:
@@ -465,6 +500,32 @@ def _check_water_robot():
         owner = getattr(Owner, name)
         if owner is not None and owner not in (Owner.WATER, Owner.ROBOT):
             raise ValueError(f"Owner.{name} 은 Owner.WATER 또는 Owner.ROBOT 이어야 함 (지금 {owner!r}).")
+
+    # 추진기: 넣는 방법은 정해진 선택지만, 명령 범위는 (작은 값, 큰 값), 최대 추력은 양수
+    if Thruster.METHOD is not None and Thruster.METHOD not in (Thruster.ACC, Thruster.ACTUATOR):
+        raise ValueError(
+            f"Thruster.METHOD 는 Thruster.ACC 또는 Thruster.ACTUATOR 여야 함 (지금 {Thruster.METHOD!r})."
+        )
+    if Thruster.CMD_RANGE is not None and not Thruster.CMD_RANGE[0] < Thruster.CMD_RANGE[1]:
+        raise ValueError(f"Thruster.CMD_RANGE 는 (작은 값, 큰 값) 이어야 함 (지금 {Thruster.CMD_RANGE}).")
+    for name in ("MAX_FORWARD", "MAX_REVERSE"):
+        value = getattr(Thruster, name)
+        if value is not None and value <= 0:
+            raise ValueError(f"Thruster.{name} 은 0 보다 커야 함 (지금 {value}). 후진도 크기만 양수로 적음.")
+    # 추진기 위치: 선체 상자 안(표면 포함), 왼쪽은 y>0 · 오른쪽은 y<0 (FLU 에서 왼쪽이 +y)
+    half = None if None in (Hull.LENGTH, Hull.BEAM, Hull.HEIGHT) else (Hull.LENGTH / 2, Hull.BEAM / 2, Hull.HEIGHT / 2)
+    for name in ("POS_L_B", "POS_R_B"):
+        pos = getattr(Thruster, name)
+        if pos is None:
+            continue
+        if len(pos) != 3:
+            raise ValueError(f"Thruster.{name} 은 (x, y, z) 3개여야 함 (지금 {pos}).")
+        if half is not None and any(abs(p) > h for p, h in zip(pos, half)):
+            raise ValueError(f"Thruster.{name} {pos} 가 선체 상자(±{half}) 밖에 있음.")
+    if Thruster.POS_L_B is not None and Thruster.POS_L_B[1] <= 0:
+        raise ValueError(f"왼쪽 추진기 y 는 양수여야 함 (FLU, 지금 {Thruster.POS_L_B[1]}).")
+    if Thruster.POS_R_B is not None and Thruster.POS_R_B[1] >= 0:
+        raise ValueError(f"오른쪽 추진기 y 는 음수여야 함 (FLU, 지금 {Thruster.POS_R_B[1]}).")
 
     # 중력은 채워졌다면 양수 (부호는 아래 방향으로 water.py 가 처리)
     if Physics.GRAVITY is not None and Physics.GRAVITY <= 0:

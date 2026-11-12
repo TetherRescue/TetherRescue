@@ -26,4 +26,4 @@ ros2_ws/log/
 *.csv
 
 # 개인용 Claude 지침
-CLAUDE.md
+CLAUDE.local.md
