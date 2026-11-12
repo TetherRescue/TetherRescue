@@ -8,7 +8,7 @@
 | --- | --- | --- | --- | --- |
 | 1 | 물 | 미현 | `sim/water.py` | `dev/mihyun` |
 | 2 | 로봇 | 동경 (팀장) | `sim/robot.py` | `dev/dongkyeong` |
-| 3 | 세계 조립 · 계약 | 가영 | `sim/world.py` `config.py` `forces.py` `human.py` `tether.py` | `dev/kayoung` |
+| 3 | 세계 조립 · 통합 충돌 확인 | 가영 | `sim/world.py` `config.py` `forces.py` `human.py` `tether.py` | `dev/kayoung` |
 | 4 | 검증 | 채연 | `tests/` `docs/` | `dev/chaeyeon` |
 | 5 | 단계 연결 · CI | 태수 | `sim/phase_manager.py` `watchdog.py` | `dev/taesu` |
 
@@ -20,7 +20,7 @@
 ## 구조
 
 ```
-sim/      시뮬레이터 모듈 (config·forces는 계약 파일)
+sim/      시뮬레이터 모듈 (config·forces·frames는 계약 파일)
 tests/    단위·통합 테스트, 속도 측정
 docs/     CONTRACT.md(계약), PARAMETERS.md(파라미터 근거)
 ```

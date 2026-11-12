@@ -9,6 +9,8 @@ sudo apt install python3.12-venv -y
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
+# torch 는 CPU 빌드를 먼저 (그냥 설치하면 GPU 용 CUDA 패키지를 수 GB 받음)
+python -m pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cpu
 python -m pip install -r requirements.txt
 python -m pip check
 ```

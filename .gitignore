@@ -21,3 +21,6 @@ ros2_ws/log/
 # OS
 .DS_Store
 *:Zone.Identifier
+
+# 데이터 (CSV는 크기와 무관하게 올리지 않음)
+*.csv
