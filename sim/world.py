@@ -61,9 +61,6 @@ def build_world(*, parts=None, timestep=None, gravity=None, integrator=None):
         from sim.human import Human
 
         parts = (Water(), Robot(), Tether(), Human())
-        # 물 클래스는 아직 뼈대이므로 config에 먼저 기록된 요구값도 검사한다.
-        if timestep > config.Water.REQUIRES["max_dt"]:
-            raise ValueError("timestep이 config.Water.REQUIRES['max_dt']를 초과합니다.")
     parts = tuple(parts)
     for part in parts:
         max_dt = part.REQUIRES.get("max_dt")
