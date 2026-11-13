@@ -1,4 +1,4 @@
-"""3 세계 조립: 줄 (tendon 스프링, 끊김) (담당: 가영)."""
+"""줄: 인장 전용 tendon 스프링·감쇠와 실행 중 연결·해제 (담당: 가영)."""
 
 import numpy as np
 
@@ -8,9 +8,16 @@ from sim import config
 class Tether:
     REQUIRES = {}
 
-    def __init__(self, *, enabled=False):
-        # 연결 시점 합의 전: 기본 세계는 미연결, 시험에서는 enabled=True로 명시한다.
+    def __init__(self, *, enabled=False, attached=None):
+        # enabled는 조립 여부, attached는 연결 상태. 기본 세계는 로프를 생성하지 않는다.
         self.enabled = enabled
+        attached = enabled if attached is None else attached
+        if not isinstance(attached, bool) or (attached and not enabled):
+            raise ValueError("생성하지 않은 로프는 연결할 수 없습니다.")
+        self.initially_attached = attached
+        self._attached = attached
+        self._stiffness = None
+        self._model = None
         self.tendon_id = None
         self.site_ids = None
         self.body_ids = None
@@ -29,15 +36,15 @@ class Tether:
         for name in names:
             if spec.site(name) is None:
                 raise ValueError(f"Tether.build 전에 연결점 '{name}'을 생성해야 합니다.")
-        rest_length, stiffness, self.damping = values
+        rest_length, self._stiffness, self.damping = values
         tendon = spec.add_tendon(name=config.Names.TETHER_TENDON)
         # 0~기준길이는 스프링 힘이 없는 구간. 길이가 더 길 때만 엔진이 당긴다.
         tendon.springlength[:] = (0.0, rest_length)
-        tendon.stiffness[:] = (stiffness, 0.0, 0.0)
+        tendon.stiffness[:] = (self._stiffness if self.attached else 0.0, 0.0, 0.0)
         # 내장 감쇠는 느슨할 때도 작용할 수 있으므로 add_forces에서 인장 보정만 계산한다.
         tendon.damping[:] = 0.0
         tendon.width = 0.008
-        tendon.rgba[:] = (0.95, 0.85, 0.3, 1.0)
+        tendon.rgba[:] = (0.95, 0.85, 0.3, 1.0 if self.attached else 0.0)
         for name in names:
             tendon.wrap_site(name)
 
@@ -51,13 +58,44 @@ class Tether:
                         model.site(config.Names.LIFEBUOY_TOW_SITE).id)
         except KeyError as error:
             raise ValueError("Tether.bind 전에 연결점·tendon의 build·compile이 필요합니다.") from error
+        self._model = model
         self.tendon_id = tendon_id
         self.site_ids = site_ids
         self.body_ids = tuple(int(model.site_bodyid[site]) for site in site_ids)
 
+    @property
+    def attached(self):
+        return self._attached
+
+    def set_attached(self, model, attached):
+        """생성된 tendon을 실행 중 연결·해제한다. 위치·속도·기준 길이는 바꾸지 않는다.
+
+        모델 계수 변경 뒤 힘을 읽기 전에는 mj_forward로 파생 상태를 갱신한다.
+        """
+        if not self.enabled or self.tendon_id is None or model is not self._model:
+            raise ValueError("이 모델에 생성·bind된 로프가 필요합니다.")
+        if not isinstance(attached, bool):
+            raise ValueError("연결 상태는 bool이어야 합니다.")
+        self._attached = attached
+        model.tendon_stiffness[self.tendon_id] = self._stiffness if attached else 0.0
+        model.tendon_rgba[self.tendon_id, 3] = 1.0 if attached else 0.0
+
+    def attach(self, model):
+        self.set_attached(model, True)
+
+    def detach(self, model):
+        self.set_attached(model, False)
+
+    def reset(self, model):
+        """mj_resetData는 모델 계수를 복원하지 않으므로 실행 제어에서 함께 호출한다."""
+        if self.enabled:
+            self.set_attached(model, self.initially_attached)
+
     def _forces(self, model, data):
         if self.tendon_id is None:
             raise RuntimeError("연결된 Tether의 bind를 먼저 호출하세요.")
+        if not self.attached:
+            return 0.0, 0.0
         length = float(data.ten_length[self.tendon_id])
         rest_length = model.tendon_lengthspring[self.tendon_id, 1]
         stiffness = model.tendon_stiffness[self.tendon_id]
@@ -73,7 +111,7 @@ class Tether:
 
     def add_forces(self, model, data, acc):
         """엔진 스프링에 더할 감쇠 보정만 전달한다. 스프링 힘 자체는 중복하지 않는다."""
-        if not self.enabled:
+        if not self.enabled or not self.attached:
             return
         tension, spring = self._forces(model, data)
         correction = tension - spring

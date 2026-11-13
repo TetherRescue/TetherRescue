@@ -1,4 +1,4 @@
-"""캡슐을 원형으로 배치한 구명환. 첫 단계는 사람과의 고정 연결 시험이다."""
+"""구명환 형상. 전달·잡기 시험에는 attached=False인 독립 자유 강체를 사용한다."""
 
 import operator
 
@@ -10,8 +10,10 @@ from sim import config
 class Lifebuoy:
     REQUIRES = {}
 
-    def __init__(self, *, attached=True, position=(0.0, 0.0, 1.0)):
+    def __init__(self, *, attached=True, position=(0.0, 0.0, 1.0), grip_sites=False, human_contact=False):
         self.attached = attached
+        self.grip_sites = grip_sites
+        self.human_contact = human_contact
         self.position = position
         self.body_id = None
         self.site_id = None
@@ -27,6 +29,8 @@ class Lifebuoy:
         import mujoco
 
         cfg = config.Lifebuoy
+        if self.grip_sites and self.attached:
+            raise ValueError("잡기 시험에는 Lifebuoy(attached=False, grip_sites=True)를 사용하세요.")
         radius, tube, mass = float(cfg.CENTERLINE_RADIUS), float(cfg.TUBE_RADIUS), float(cfg.MASS)
         segments = operator.index(cfg.SEGMENTS)
         if not np.isfinite([radius, tube, mass]).all() or min(radius, tube, mass) <= 0:
@@ -55,12 +59,19 @@ class Lifebuoy:
                 fromto=endpoints.ravel(), size=[tube, 0, 0], mass=mass / segments,
                 rgba=[1.0, 0.3, 0.05, 1.0] if index % 3 else [0.95, 0.95, 0.95, 1.0],
                 group=0 if config.Groups.PHYSICS is None else config.Groups.PHYSICS,
-                contype=0, conaffinity=0,
+                **(dict(solref=[.006, 1], solimp=[.95, .99, .001, .5, 2]) if self.human_contact else {}),
+                contype=2 if self.human_contact else 0, conaffinity=1 if self.human_contact else 0,
             )
         body.add_site(
             name=config.Names.LIFEBUOY_TOW_SITE, pos=tow_point,
             size=[0.02, 0, 0], rgba=[0.1, 0.3, 1.0, 1.0],
         )
+
+        if self.grip_sites:
+            for name, position in ((config.Names.LIFEBUOY_GRIP_L_SITE, cfg.GRIP_L_POINT_B),
+                                   (config.Names.LIFEBUOY_GRIP_R_SITE, cfg.GRIP_R_POINT_B)):
+                body.add_site(name=name, pos=self._vector(position, name), size=[.014, 0, 0],
+                              rgba=[.2, 1., .3, 1.])
 
     def bind(self, model):
         try:
@@ -71,5 +82,5 @@ class Lifebuoy:
         self.body_id, self.site_id = body_id, site_id
 
     def add_forces(self, model, data, acc):
-        """추가 외력 없음. 부력·물 저항·실제 로프는 이후 연결한다."""
+        """직접 외력을 추가하지 않는다. 실험 부력은 Water, 로프는 Tether에서 처리한다."""
         pass

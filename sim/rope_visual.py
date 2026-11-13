@@ -51,3 +51,23 @@ def rope_curve(start, end, rest_length, *, segments=64):
     points = baseline + ((low + high) / 2) * wave
     points[0], points[-1] = start, end
     return points
+
+
+def draw_rope(scene, model, data, rope, *, clear=False):
+    """연결된 로프를 표시한다. 자세·속도·물리 스텝은 변경하지 않는다."""
+    import mujoco
+
+    if clear:
+        scene.ngeom = 0
+    model.tendon_rgba[rope.tendon_id, 3] = 0
+    if not rope.attached:
+        return
+    start, end = (data.site_xpos[i] for i in rope.site_ids)
+    points = rope_curve(start, end, model.tendon_lengthspring[rope.tendon_id, 1])
+    color = [1., .4, .05, 1.] if rope.tension(model, data) > .01 else [.7, .75, .8, 1.]
+    for start, end in zip(points[:-1], points[1:]):
+        geom = scene.geoms[scene.ngeom]
+        mujoco.mjv_initGeom(geom, mujoco.mjtGeom.mjGEOM_CAPSULE, np.zeros(3), np.zeros(3),
+                          np.eye(3).ravel(), color)
+        mujoco.mjv_connector(geom, mujoco.mjtGeom.mjGEOM_CAPSULE, .012, start, end)
+        scene.ngeom += 1

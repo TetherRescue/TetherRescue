@@ -15,7 +15,7 @@ def test_mass_and_fixed_attachment_do_not_duplicate_human_mass():
     human, ring = Human(), Lifebuoy()
     world = build_world(parts=[human, ring])
     model = world.model
-    assert model.ngeom == 18
+    assert model.ngeom == len(human.geom_ids) + config.Lifebuoy.SEGMENTS
     assert model.nq == 7 and model.nv == 6  # 환에 별도 자유 관절을 추가하지 않는다.
     assert model.body_parentid[ring.body_id] == human.body_id
     assert model.body_mass[human.body_id] == pytest.approx(70)

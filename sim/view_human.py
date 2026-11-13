@@ -11,20 +11,14 @@ import numpy as np
 
 from sim.human import Human
 from sim.lifebuoy import Lifebuoy
-from sim.world import build_world
+from sim.world import advance_world, build_world
 
 
 def advance(world):
     # 바닥·부력이 없는 데모: 화면 밖으로 떨어지면 처음 위치에서 반복한다.
     if world.data.time >= 1.0:
         mujoco.mj_resetData(world.model, world.data)
-    mujoco.mj_forward(world.model, world.data)
-    world.acc.reset()
-    for part in world.parts:
-        part.add_forces(world.model, world.data, world.acc)
-    world.acc.apply(world.model, world.data)
-    mujoco.mj_step(world.model, world.data)
-    mujoco.mj_forward(world.model, world.data)  # 렌더링할 위치도 갱신한다.
+    advance_world(world)
 
 
 def main():

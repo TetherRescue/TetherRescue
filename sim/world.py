@@ -39,7 +39,7 @@ def build_world(*, parts=None, timestep=None, gravity=None, integrator=None):
     인자를 생략하면 config의 계약값을 사용한다. 아직 None인 값은 임의로
     확정하지 않고 오류를 낸다. 실험 시에만 명시적 인자로 임시값을 전달한다.
     gravity=0은 중력 없는 독립 힘 실험에 사용할 수 있다 (공통 config는 유지).
-    parts 생략 시 물·로봇·줄·사람의 현재 구현을 조립한다.
+    parts 생략 시 물·로봇·사람·구명환·미연결 줄을 조립한다.
     """
     timestep = _positive(
         config.Sim.TIMESTEP if timestep is None else timestep, "Sim.TIMESTEP"
@@ -99,3 +99,16 @@ def build_world(*, parts=None, timestep=None, gravity=None, integrator=None):
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
     return World(spec, model, data, parts, ForceAccumulator())
+
+
+def advance_world(world):
+    """현재 상태에서 물리를 한 스텝 진행한다. 제어 갱신·리셋은 호출 측에서 처리한다."""
+    import mujoco
+
+    mujoco.mj_forward(world.model, world.data)
+    world.acc.reset()
+    for part in world.parts:
+        part.add_forces(world.model, world.data, world.acc)
+    world.acc.apply(world.model, world.data)
+    mujoco.mj_step(world.model, world.data)
+    mujoco.mj_forward(world.model, world.data)
