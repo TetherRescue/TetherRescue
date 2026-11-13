@@ -28,3 +28,9 @@ ros2_ws/log/
 
 # 개인용 Claude 지침
 CLAUDE.local.md
+
+# 개인용 시뮬레이션 보기 도구 (미현)
+tools/water_viewer.py
+
+# 개인 정리 문서 (미현)
+docs/THERMAL_SIM.md
