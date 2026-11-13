@@ -54,3 +54,30 @@ def test_rendered_slack_segments_keep_two_meters_and_leave_physics_unchanged():
     np.testing.assert_array_equal(demo.world.model.tendon_lengthspring, original_spring)
     np.testing.assert_array_equal(demo.world.data.ten_length, original_gap)
     assert demo.rope.tension(demo.world.model, demo.world.data) == 0
+
+
+@pytest.mark.parametrize('clear,attached,expected', [(False, True, 65), (True, True, 64),
+                                                    (False, False, 1), (True, False, 0)])
+def test_shared_rope_drawing_preserves_physics_and_handles_scene_contents(clear, attached, expected):
+    mujoco = pytest.importorskip('mujoco')
+    from sim import config
+    from sim.rope_visual import draw_rope
+    from sim.scenarios import WearDemo
+
+    demo = WearDemo()
+    model, data = demo.world.model, demo.world.data
+    if not attached:
+        demo.rope.detach(model)
+    scene = mujoco.MjvScene(model, maxgeom=128)
+    scene.ngeom = 1
+    qpos, qvel = data.qpos.copy(), data.qvel.copy()
+    spring = model.tendon_lengthspring.copy()
+    draw_rope(scene, model, data, demo.rope, clear=clear)
+    assert scene.ngeom == expected
+    if attached:
+        first = 0 if clear else 1
+        length = sum(2 * scene.geoms[i].size[2] for i in range(first, expected))
+        assert length == pytest.approx(config.Tether.REST_LENGTH)
+    np.testing.assert_array_equal(data.qpos, qpos)
+    np.testing.assert_array_equal(data.qvel, qvel)
+    np.testing.assert_array_equal(model.tendon_lengthspring, spring)
