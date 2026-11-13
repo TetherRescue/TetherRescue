@@ -37,7 +37,7 @@ def build_surface_towing_world():
     ring_end_x = config.Lifebuoy.POSITION_IN_HUMAN_B[0] + config.Lifebuoy.TOW_POINT_B[0]
     boat_x = ring_end_x + .9 * config.Tether.REST_LENGTH + config.Hull.LENGTH / 2
     robot = Robot(position=(boat_x, 0, height),
-                  tow_point_b=(-config.Hull.LENGTH / 2, 0, -.08))
+                  tow_point_b=config.Hull.TOW_POINT_B)
     human = Human(position=(0, -config.Lifebuoy.TOW_POINT_B[1], -.03 + config.WaterParams.SURFACE_Z))
     water = Water(waves=config.WaterParams.WAVES_CALM,
                   floating_bodies=[config.Names.HUMAN_BODY], surface_visual=True)

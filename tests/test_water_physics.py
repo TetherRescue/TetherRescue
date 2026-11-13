@@ -38,7 +38,9 @@ def test_archimedes_force_matches_analytic_box(height, volume):
     loads = applied_loads(world, water)
     np.testing.assert_allclose(loads[boat.body_id, :3],
                                [0, 0, volume * config.Physics.RHO_WATER * config.Physics.GRAVITY], atol=1e-9)
-    np.testing.assert_allclose(loads[boat.body_id, 3:], 0, atol=1e-9)
+    # 새 선체는 COM_x가 0이 아니므로 부력 중심과의 간격만큼 pitch 토크가 생긴다.
+    expected_torque = np.cross(-np.asarray(config.Hull.COM), [0., 0., volume * config.Physics.RHO_WATER * config.Physics.GRAVITY])
+    np.testing.assert_allclose(loads[boat.body_id, 3:], expected_torque, atol=1e-9)
 
 
 def test_dry_body_has_no_water_drag_or_torque():
@@ -58,7 +60,8 @@ def test_actual_boat_settles_to_analytic_draft_without_drift():
         advance(world)
     draft = config.Hull.HEIGHT / 2 - world.data.xpos[boat.body_id, 2]
     assert draft == pytest.approx(config.Expect.DRAFT, abs=2e-4)
-    np.testing.assert_allclose(world.data.xpos[boat.body_id, :2], 0, atol=1e-8)
+    # 비대칭 COM의 pitch 정착 동안 작은 원점 이동은 가능하지만 지속 표류하면 안 된다.
+    assert np.linalg.norm(world.data.xpos[boat.body_id, :2]) < .02
     velocity, omega = body_velocity_w(world.model, world.data, boat.body_id)
     assert np.linalg.norm(velocity) < 1e-3 and np.linalg.norm(omega) < 1e-3
     assert not world.data.warning.number.any()

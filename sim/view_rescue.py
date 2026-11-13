@@ -30,7 +30,7 @@ def _build_rescue_world(*, start, victim, yaw, tow_heading, rope):
         raise ValueError('출발·사람 위치와 방향은 유한한 값이어야 합니다.')
     draft = config.Hull.MASS / (config.Physics.RHO_WATER * config.Hull.LENGTH * config.Hull.BEAM)
     robot = Robot(position=(*start, config.WaterParams.SURFACE_Z + config.Hull.HEIGHT / 2 - draft),
-                  tow_point_b=(-config.Hull.LENGTH / 2, 0, -.08))
+                  tow_point_b=config.Hull.TOW_POINT_B)
     human = Human(position=(*victim, config.WaterParams.SURFACE_Z - .03))
     water = Water(waves=(), floating_bodies=[config.Names.HUMAN_BODY], surface_visual=True)
     world = build_world(parts=[water, robot, human, Lifebuoy(), rope])

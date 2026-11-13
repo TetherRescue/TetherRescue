@@ -24,14 +24,14 @@ class ApproachSettings:
 
     max_speed: float = .5
     distance_gain: float = .18
-    speed_gain: float = 350.0  # N / (m/s)
-    position_gain: float = 100.0  # 정지 유지 N/m
+    speed_gain: float = 60.0  # N / (m/s)
+    position_gain: float = 30.0  # 정지 유지 N/m
     heading_gain: float = 1.4  # 목표 yaw 속도 / 방향 오차
-    yaw_speed_gain: float = 300.0  # N·m / (rad/s)
+    yaw_speed_gain: float = 12.0  # N·m / (rad/s)
     max_yaw_speed: float = .6
-    max_force: float = 180.0
-    max_brake_force: float = 120.0
-    max_yaw_torque: float = 100.0
+    max_force: float = 60.0
+    max_brake_force: float = 30.0
+    max_yaw_torque: float = 6.0
     capture_radius: float = .05
     position_tolerance: float = .20
     reapproach_radius: float = .21
@@ -113,11 +113,14 @@ class PhaseManager:
     def _set_force(self, force, torque):
         # 정·역추력 최대값이 달라 명령 ±같은 값은 순수 회전이 아니다.
         # 먼저 좌우 힘[N]으로 분배한 뒤 각 추진기의 정규화 명령으로 역변환한다.
-        model = self.world.model
-        right_y = model.site_pos[self.robot.site_ids[1], 1]
-        left_force = (-torque - right_y * force) / self._lever
-        forces = np.clip([left_force, force - left_force],
-                         -config.Thruster.MAX_REVERSE, config.Thruster.MAX_FORWARD)
+        # 요 토크를 먼저 가능한 범위로 제한하고, 두 노즐 한계 안에서 합력을 배분한다.
+        # 좌우를 각각 잘라 버리면 원하는 순수 회전이 전진 운동으로 바뀐다.
+        maximum, minimum = config.Thruster.MAX_FORWARD, -config.Thruster.MAX_REVERSE
+        torque = float(np.clip(torque, -.5 * self._lever * (maximum - minimum),
+                               .5 * self._lever * (maximum - minimum)))
+        difference = 2 * torque / self._lever
+        force = float(np.clip(force, 2 * minimum + abs(difference), 2 * maximum - abs(difference)))
+        forces = np.array([(force - difference) / 2, (force + difference) / 2])
         commands = forces / np.where(forces >= 0, config.Thruster.MAX_FORWARD,
                                       config.Thruster.MAX_REVERSE)
         self.forward = float((commands[0] + commands[1]) / 2)

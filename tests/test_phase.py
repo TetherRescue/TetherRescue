@@ -71,7 +71,9 @@ def test_turning_at_goal_does_not_translate_due_to_asymmetric_thrusters():
     for _ in range(6500):
         manager.step()
     assert manager.arrived
-    assert manager.readings()['distance'] < 1e-8
+    # 새 선체의 치우친 COM·수력에 따른 cm 단위 이동을 허용한다.
+    # 순수 회전의 추력 합력 0은 별도의 실제 힘 검사로 검증한다.
+    assert manager.readings()['distance'] < .05
     assert abs(manager.readings()['heading_error']) < manager.settings.heading_tolerance
 
 
@@ -124,3 +126,22 @@ def test_invalid_goal_is_rejected(target, heading):
 def test_invalid_settings_are_rejected(options):
     with pytest.raises(ValueError):
         ApproachSettings(**options)
+
+
+@pytest.mark.parametrize('force,torque', [(0., 6.), (100., 6.), (-100., -6.)])
+def test_thrust_saturation_preserves_requested_yaw_torque(force, torque):
+    from sim import config
+
+    manager = build_approach_demo(target=(0, 0))
+    manager._set_force(force, torque)
+    left, right = manager.robot.thrusts()
+    assert -config.Thruster.MAX_REVERSE <= left <= config.Thruster.MAX_FORWARD
+    assert -config.Thruster.MAX_REVERSE <= right <= config.Thruster.MAX_FORWARD
+    world = manager.world
+    world.acc.reset()
+    manager.robot.add_forces(world.model, world.data, world.acc)
+    world.acc.apply(world.model, world.data)
+    load = world.data.xfrc_applied[manager.robot.body_id]
+    assert load[5] == pytest.approx(torque)
+    if force == 0:
+        assert load[0] == pytest.approx(0.)

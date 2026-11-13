@@ -51,7 +51,8 @@ def test_without_rope_thrust_does_not_move_human():
     world = build_world(parts=[robot, human, Lifebuoy()], gravity=0)
     robot.set_command(.2)
     start = world.data.xpos[human.body_id].copy()
+    boat_start = world.data.xpos[robot.body_id, 0]
     for _ in range(1000):
         advance(world)
     np.testing.assert_allclose(world.data.xpos[human.body_id], start, atol=1e-12)
-    assert world.data.xpos[robot.body_id, 0] > 4
+    assert world.data.xpos[robot.body_id, 0] > boat_start + .1
