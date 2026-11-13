@@ -238,12 +238,24 @@ def _tilt_torque(**tilt):
     return np.cross(points - data.xipos[bid], forces).sum(axis=0)
 
 
-@pytest.mark.parametrize("deg", [5, 15, -15])
+# 바닥 모서리가 물 밖으로 나오는 각도 = atan(2·흘수 / 폭). 새 선체(흘수 2.45 cm, 폭 0.6 m)는 약 4.7°.
+# 이 각도를 넘으면 복원 토크가 거의 늘지 않아서 작은 각도 공식 k·θ 가 맞지 않는다.
+EDGE_EMERGE_DEG = math.degrees(math.atan(2 * config.Expect.DRAFT / config.Hull.BEAM))
+
+
+@pytest.mark.parametrize("deg", [3, -3, 15, -15])
 def test_roll_restores(deg):
     # PoC 재발 방지: 기울이면 반대 방향으로 되돌리는 토크가 생겨야 함 (한 점 부력이면 0 이 됨)
     torque = _tilt_torque(roll_deg=deg)
     assert np.sign(torque[0]) == -np.sign(deg)
-    # 크기는 직육면체 손 계산(k·θ)과 30% 안. 폭 방향 4칸뿐이라 생기는 근사 오차
+
+
+@pytest.mark.parametrize("deg", [3, -3])
+def test_roll_small_angle_matches_hand(deg):
+    # 크기는 모서리가 잠겨 있는 작은 각도에서만 직육면체 손 계산(k·θ)과 비교한다.
+    # 30% 허용: 폭 방향 칸 수가 적어서 생기는 복셀 근사 오차
+    assert abs(deg) < EDGE_EMERGE_DEG, "작은 각도 공식은 모서리가 잠겨 있을 때만 성립"
+    torque = _tilt_torque(roll_deg=deg)
     k_roll = water.restoring_stiffness(config.Hull.MASS)[0]
     assert abs(torque[0]) == pytest.approx(k_roll * math.radians(abs(deg)), rel=0.3)
 
@@ -283,9 +295,12 @@ def test_heave_damping_ratio():
 
 
 def test_surge_drag_by_hand():
-    # 앞으로 1 m/s: F = −(선형 5 × 1 + ½ × 1025 × Cd 0.6 × 앞면 넓이(폭 1.0 × 흘수 0.1016) × 1²) ≈ −36.24 N
+    # 앞으로 1 m/s: F = −(선형 계수 × 1 + ½ × 물 밀도 × Cd × 앞면 넓이(폭 × 흘수) × 1²)
+    # 숫자를 직접 적지 않고 config 에서 읽는다 → 선체 크기가 바뀌어도 테스트를 고칠 필요 없음
     force_b, _ = water.drag_b([1.0, 0.0, 0.0], [0.0, 0.0, 0.0], COEFFS)
-    expected = -(5.0 + 0.5 * 1025 * 0.6 * (1.0 * config.Expect.DRAFT))
+    expected = -(WaterParams.DRAG_LINEAR[0]
+                 + 0.5 * config.Physics.RHO_WATER * WaterParams.DRAG_CD[0]
+                 * (config.Hull.BEAM * config.Expect.DRAFT))
     assert force_b[0] == pytest.approx(expected)
     assert force_b[1] == 0.0 and force_b[2] == 0.0  # 앞으로만 움직이면 옆·위아래 저항 없음
 
