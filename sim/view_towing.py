@@ -23,7 +23,7 @@ def build_towing_world():
     robot = Robot(position=(4, 0, 1), tow_point_b=(-config.Hull.LENGTH / 2, 0, 0))
     human = Human(position=(0, -.325, 1))
     rope = Tether(enabled=True)
-    world = build_world(parts=[robot, human, Lifebuoy(), rope], gravity=0)
+    world = build_world(parts=[robot, human, Lifebuoy(attached=True), rope], gravity=0)
     robot.set_command(forward=.2)
     return world, robot, human, rope
 
@@ -40,9 +40,9 @@ def build_surface_towing_world():
                   tow_point_b=config.Hull.TOW_POINT_B)
     human = Human(position=(0, -config.Lifebuoy.TOW_POINT_B[1], -.03 + config.WaterParams.SURFACE_Z))
     water = Water(waves=config.WaterParams.WAVES_CALM,
-                  floating_bodies=[config.Names.HUMAN_BODY], surface_visual=True)
+                  floating_bodies=[config.Names.HUMAN_BODY, config.Names.LIFEBUOY_BODY], surface_visual=True)
     rope = Tether(enabled=True)
-    world = build_world(parts=[water, robot, human, Lifebuoy(), rope])
+    world = build_world(parts=[water, robot, human, Lifebuoy(attached=True), rope])
     robot.set_command(forward=.2)
     return world, robot, human, rope
 
@@ -75,6 +75,7 @@ def main():
     import mujoco.viewer
 
     with mujoco.viewer.launch_passive(world.model, world.data) as viewer:
+        viewer.opt.geomgroup[config.Groups.PHYSICS] = 1
         viewer.cam.lookat[:] = (2, 0, 1 if args.dry else 0)
         viewer.cam.distance = 9
         viewer.cam.azimuth = 90

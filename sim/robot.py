@@ -90,9 +90,9 @@ class Robot:
             type=mujoco.mjtGeom.mjGEOM_BOX,
             size=(Hull.LENGTH / 2, Hull.BEAM / 2, Hull.HEIGHT / 2),   # MuJoCo box 는 반 길이
             rgba=(0.9, 0.4, 0.1, 1.0),
+            group=config.Groups.PHYSICS,
+            contype=config.Contacts.BOAT, conaffinity=config.Contacts.BOAT_AFFINITY,
         )
-        if config.Groups.PHYSICS is not None:   # 가영 님이 정하기 전엔 MuJoCo 기본값(0)
-            hull.group = config.Groups.PHYSICS
 
         body.add_site(name=Names.THRUSTER_L_SITE, pos=Thruster.POS_L_B, size=SITE_SIZE)
         body.add_site(name=Names.THRUSTER_R_SITE, pos=Thruster.POS_R_B, size=SITE_SIZE)

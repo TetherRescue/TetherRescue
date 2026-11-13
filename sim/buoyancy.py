@@ -4,6 +4,8 @@ import itertools
 
 import numpy as np
 
+from sim import config
+
 
 def body_voxels(model, body_id, spacing):
     """body 좌표 중심점·반크기. 겹친 팔다리·구명환 부피는 한 번만 센다.
@@ -21,6 +23,8 @@ def body_voxels(model, body_id, spacing):
     geoms = []
     bounds = []
     for gid in range(model.ngeom):
+        if model.geom_group[gid] != config.Groups.PHYSICS:
+            continue
         owner = int(model.geom_bodyid[gid])
         ancestor = owner
         while ancestor != body_id and ancestor != 0 and model.body_jntnum[ancestor] == 0:

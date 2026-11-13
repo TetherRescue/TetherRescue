@@ -207,8 +207,8 @@ def test_invalid_grasp_settings_fail(options):
 def test_grasp_requires_independent_bodies_and_explicit_sites():
     with pytest.raises(ValueError, match='site'):
         build_world(parts=[Human(), Lifebuoy(attached=False), HumanGrasp()])
-    with pytest.raises(ValueError, match='attached=False'):
-        build_world(parts=[Human(grip_sites=True), Lifebuoy(grip_sites=True)])
+    world = build_world(parts=[Human(grip_sites=True), Lifebuoy(grip_sites=True), HumanGrasp()])
+    assert world.model.body_parentid[world.model.body(config.Names.LIFEBUOY_BODY).id] == 0
 
 
 def test_moving_fixture_without_delivery_never_tows_the_person():

@@ -9,7 +9,7 @@ class Human:
     # 이 단순 강체만으로 추가 시간 간격 제한을 확정하지 않는다.
     REQUIRES = {}
 
-    def __init__(self, position=(0.0, 0.0, 1.0), *, shape=None, grip_sites=False, articulated_arms=False, ring_contact=False):
+    def __init__(self, position=(0.0, 0.0, 1.0), *, shape=None, grip_sites=False, articulated_arms=False, ring_contact=True):
         # 기본 위치는 독립 시험용: 수면 기준 1m 위, 몸의 긴 방향은 월드 +x.
         # 실제 구조 장면의 배치는 world 생성 시 별도로 전달한다.
         self.position = position
@@ -51,12 +51,15 @@ class Human:
                 raise ValueError("잡기 연결점은 humanoid 형상에서만 지원합니다.")
             self._build_box(body, mass)
 
-    def _geom_options(self):
+    def _geom_options(self, *, visual=False):
+        if visual:
+            return dict(group=config.Groups.VISUAL, contype=0, conaffinity=0)
         contact = dict(solref=[.006, 1], solimp=[.95, .99, .001, .5, 2]) if self.ring_contact else {}
         return dict(
             **contact,
-            group=0 if config.Groups.PHYSICS is None else config.Groups.PHYSICS,
-            contype=1 if self.ring_contact else 0, conaffinity=2 if self.ring_contact else 0,
+            group=config.Groups.PHYSICS,
+            contype=config.Contacts.HUMAN if self.ring_contact else 0,
+            conaffinity=config.Contacts.HUMAN_AFFINITY if self.ring_contact else 0,
         )
 
     def _build_box(self, body, mass):
@@ -104,7 +107,7 @@ class Human:
         def ellipsoid(name, position, size, part_mass, color):
             body.add_geom(name=name, type=mujoco.mjtGeom.mjGEOM_ELLIPSOID,
                           pos=self._vector(position, name), size=self._vector(size, name),
-                          mass=part_mass, rgba=color, **self._geom_options())
+                          mass=part_mass, rgba=color, **self._geom_options(visual=part_mass == 0))
 
         def capsule(name, endpoints, radius, part_mass, color):
             points = np.asarray(endpoints, dtype=float)
@@ -114,7 +117,7 @@ class Human:
                 raise ValueError("사람 캡슐은 서로 다른 유한한 끝점과 양수 반지름이 필요합니다.")
             body.add_geom(name=name, type=mujoco.mjtGeom.mjGEOM_CAPSULE,
                           fromto=points.ravel(), size=[radius, 0, 0],
-                          mass=part_mass, rgba=color, **self._geom_options())
+                          mass=part_mass, rgba=color, **self._geom_options(visual=part_mass == 0))
 
         # 어깨와 허리가 구분되는 단면. 단일 캡슐의 둥근 소시지 윤곽을 대체한다.
         sections = np.asarray(cfg.TORSO_SECTIONS_B, dtype=float)

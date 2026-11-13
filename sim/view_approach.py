@@ -105,6 +105,7 @@ def main():
 
     world = manager.world
     with mujoco.viewer.launch_passive(world.model, world.data) as viewer:
+        viewer.opt.geomgroup[config.Groups.PHYSICS] = 1
         viewer.cam.lookat[:] = [*(np.asarray(args.start) + np.asarray(args.target)) / 2, 0]
         viewer.cam.distance = max(8., np.linalg.norm(np.asarray(args.target) - np.asarray(args.start)) + 4)
         viewer.cam.azimuth = 100

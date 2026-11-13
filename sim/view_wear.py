@@ -7,6 +7,8 @@ import time
 import mujoco
 import numpy as np
 
+from sim import config
+
 from sim.rope_visual import draw_rope
 from sim.scenarios import WearDemo
 
@@ -35,6 +37,7 @@ def main():
     import mujoco.viewer
     world = demo.world
     with mujoco.viewer.launch_passive(world.model, world.data) as viewer:
+        viewer.opt.geomgroup[config.Groups.PHYSICS] = 1
         viewer.cam.lookat[:] = (0, .2, 1)
         viewer.cam.distance = 4.5
         viewer.cam.azimuth = 130

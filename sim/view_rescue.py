@@ -32,8 +32,8 @@ def _build_rescue_world(*, start, victim, yaw, tow_heading, rope):
     robot = Robot(position=(*start, config.WaterParams.SURFACE_Z + config.Hull.HEIGHT / 2 - draft),
                   tow_point_b=config.Hull.TOW_POINT_B)
     human = Human(position=(*victim, config.WaterParams.SURFACE_Z - .03))
-    water = Water(waves=(), floating_bodies=[config.Names.HUMAN_BODY], surface_visual=True)
-    world = build_world(parts=[water, robot, human, Lifebuoy(), rope])
+    water = Water(waves=(), floating_bodies=[config.Names.HUMAN_BODY, config.Names.LIFEBUOY_BODY], surface_visual=True)
+    world = build_world(parts=[water, robot, human, Lifebuoy(attached=True), rope])
     address = world.model.jnt_qposadr[robot.joint_id]
     quaternion = [math.cos(yaw / 2), 0, 0, math.sin(yaw / 2)]
     world.model.qpos0[address + 3:address + 7] = quaternion
@@ -153,6 +153,7 @@ def main():
     display = mujoco.MjData(world.model)
     mujoco.mj_copyData(display, world.model, manager.display_data if isinstance(manager, RescueMission) else world.data)
     with mujoco.viewer.launch_passive(world.model, display) as viewer:
+        viewer.opt.geomgroup[config.Groups.PHYSICS] = 1
         viewer.cam.lookat[:] = [*(np.asarray(args.start) + np.asarray(args.victim)) / 2, 0]
         viewer.cam.distance = max(10., np.linalg.norm(np.asarray(args.start) - np.asarray(args.victim)) + 4)
         viewer.cam.azimuth = 100

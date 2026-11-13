@@ -9,6 +9,8 @@ import time
 import mujoco
 import numpy as np
 
+from sim import config
+
 from sim.human import Human
 from sim.lifebuoy import Lifebuoy
 from sim.world import advance_world, build_world
@@ -26,7 +28,7 @@ def main():
     parser.add_argument("--headless", action="store_true", help="창 없이 데모 실행을 검사")
     parser.add_argument("--human-only", action="store_true", help="구명환 없이 사람만 표시")
     args = parser.parse_args()
-    parts = [Human()] if args.human_only else [Human(), Lifebuoy()]
+    parts = [Human()] if args.human_only else [Human(), Lifebuoy(attached=True)]
     world = build_world(parts=parts)
     if args.headless:
         run_headless(world)
@@ -46,6 +48,7 @@ def run_viewer(world, *, lookat=(0, 0, -1.5), distance=8):
     import mujoco.viewer
 
     with mujoco.viewer.launch_passive(world.model, world.data) as viewer:
+        viewer.opt.geomgroup[config.Groups.PHYSICS] = 1
         viewer.cam.lookat[:] = lookat
         viewer.cam.distance = distance
         viewer.cam.azimuth = 145

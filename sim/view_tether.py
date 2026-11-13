@@ -45,7 +45,7 @@ class DemoAnchor:
 
 def build_demo_world():
     # 실제 연결 시점의 확정이 아니라 시험에서만 처음부터 연결하는 설정이다.
-    return build_world(parts=[DemoAnchor(), Human(), Lifebuoy(), Tether(enabled=True)])
+    return build_world(parts=[DemoAnchor(), Human(), Lifebuoy(attached=True), Tether(enabled=True)])
 
 
 class PullComparison:
@@ -53,7 +53,7 @@ class PullComparison:
     def __init__(self):
         self.rope = Tether(enabled=True)
         self.world = build_world(
-            parts=[DemoAnchor(floor=True), Human(), Lifebuoy(), self.rope], gravity=0.0,
+            parts=[DemoAnchor(floor=True), Human(), Lifebuoy(attached=True), self.rope], gravity=0.0,
         )
         self.clock = 0.0
         self.phase = None
@@ -69,7 +69,10 @@ class PullComparison:
         start, end = (world.data.site_xpos[i] for i in self.rope.site_ids)
         rest = world.model.tendon_lengthspring[self.rope.tendon_id, 1]
         length = 0.75 * rest if phase == "SLACK" else rest + 1.0
-        world.data.qpos[0] += start[0] - end[0] - length
+        offset = start[0] - end[0] - length
+        world.data.qpos[0] += offset
+        ring_adr = world.model.jnt_qposadr[world.model.joint(config.Names.LIFEBUOY_FREE).id]
+        world.data.qpos[ring_adr] += offset
         world.acc.reset()
         world.acc.apply(world.model, world.data)
         mujoco.mj_forward(world.model, world.data)
@@ -167,6 +170,7 @@ def run_comparison(*, headless=False):
 
     with mujoco.viewer.launch_passive(demo.world.model, demo.world.data,
                                      show_left_ui=False, show_right_ui=False) as viewer:
+        viewer.opt.geomgroup[config.Groups.PHYSICS] = 1
         with viewer.lock():
             viewer.cam.lookat[:] = (1.1, 0, .7)
             viewer.cam.distance = 6.5

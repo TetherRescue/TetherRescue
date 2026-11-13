@@ -9,6 +9,8 @@ import time
 import mujoco
 import numpy as np
 
+from sim import config
+
 from sim.frames import body_velocity_w
 from sim.rope_visual import draw_rope
 from sim.scenarios import GraspDemo
@@ -53,6 +55,7 @@ def main():
 
     world = demo.world
     with mujoco.viewer.launch_passive(world.model, world.data) as viewer:
+        viewer.opt.geomgroup[config.Groups.PHYSICS] = 1
         viewer.cam.lookat[:] = (1, .5, -.1 if args.water else 1.)
         viewer.cam.distance = 6.5
         viewer.cam.azimuth = 130

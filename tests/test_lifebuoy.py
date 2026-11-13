@@ -11,21 +11,21 @@ from sim.world import build_world
 mujoco = pytest.importorskip("mujoco")
 
 
-def test_mass_and_fixed_attachment_do_not_duplicate_human_mass():
+def test_default_ring_is_an_independent_free_body_with_separate_mass():
     human, ring = Human(), Lifebuoy()
     world = build_world(parts=[human, ring])
     model = world.model
     assert model.ngeom == len(human.geom_ids) + config.Lifebuoy.SEGMENTS
-    assert model.nq == 7 and model.nv == 6  # 환에 별도 자유 관절을 추가하지 않는다.
-    assert model.body_parentid[ring.body_id] == human.body_id
+    assert model.nq == 14 and model.nv == 12
+    assert model.body_parentid[ring.body_id] == 0
     assert model.body_mass[human.body_id] == pytest.approx(70)
     assert model.body_mass[ring.body_id] == pytest.approx(2)
-    assert model.body_subtreemass[human.body_id] == pytest.approx(72)
+    assert model.body_subtreemass[human.body_id] == pytest.approx(70)
     assert model.site_bodyid[ring.site_id] == ring.body_id
 
 
 def test_center_is_open_but_rim_intercepts_ray():
-    world = build_world(parts=[Lifebuoy(attached=False)])
+    world = build_world(parts=[Lifebuoy(position=(0, 0, 1))])
     hit_id = np.array([-1], dtype=np.int32)
     direction = np.array([1., 0., 0.])
     # x 방향에서 yz 평면의 중심을 본다. 구멍을 통과하는 광선은 geom에 닿지 않는다.
@@ -38,24 +38,27 @@ def test_center_is_open_but_rim_intercepts_ray():
     assert hit_id[0] >= 0
 
 
-def test_tow_site_and_fixed_offset_follow_rotating_human_for_thousand_steps():
-    human, ring = Human(), Lifebuoy()
-    world = build_world(parts=[human, ring])
-    # 사람을 z축으로 90도 회전시킨 뒤 환에 편심 힘을 가해 함께 회전시킨다.
-    world.data.qpos[3:7] = [np.sqrt(0.5), 0, 0, np.sqrt(0.5)]
+def test_worn_support_keeps_ring_near_torso_and_can_be_released():
+    human, ring = Human(), Lifebuoy(attached=True)
+    world = build_world(parts=[human, ring], gravity=0)
+    assert world.model.body_parentid[ring.body_id] == 0
+    assert ring.is_worn(world.data)
     for _ in range(1000):
         mujoco.mj_forward(world.model, world.data)
         rotation = world.data.xmat[human.body_id].reshape(3, 3)
-        expected_ring = world.data.xpos[human.body_id] + rotation @ config.Lifebuoy.POSITION_IN_HUMAN_B
-        np.testing.assert_allclose(world.data.xpos[ring.body_id], expected_ring, atol=1e-10)
-        expected_site = expected_ring + rotation @ config.Lifebuoy.TOW_POINT_B
+        relative = rotation.T @ (world.data.xpos[ring.body_id] - world.data.xpos[human.body_id])
+        np.testing.assert_allclose(relative, config.Lifebuoy.POSITION_IN_HUMAN_B, atol=.002)
+        expected_site = world.data.xpos[ring.body_id] + world.data.xmat[ring.body_id].reshape(3, 3) @ config.Lifebuoy.TOW_POINT_B
         np.testing.assert_allclose(world.data.site_xpos[ring.site_id], expected_site, atol=1e-10)
         world.acc.reset()
         world.acc.add(ring.body_id, [1, 0, 0], point_w=world.data.site_xpos[ring.site_id])
         world.acc.apply(world.model, world.data)
         mujoco.mj_step(world.model, world.data)
-        assert np.isfinite(world.data.qpos).all()
-        assert np.isfinite(world.data.qvel).all()
+    qpos, qvel = world.data.qpos.copy(), world.data.qvel.copy()
+    assert ring.release_worn(world.model, world.data)
+    assert not ring.is_worn(world.data)
+    np.testing.assert_array_equal(world.data.qpos, qpos)
+    np.testing.assert_array_equal(world.data.qvel, qvel)
     assert not world.data.warning.number.any()
 
 
@@ -66,7 +69,7 @@ def test_default_world_includes_lifebuoy():
 
 
 def test_humanoid_fits_hole_and_arms_extend_outside_without_penetration():
-    human, ring = Human(), Lifebuoy()
+    human, ring = Human(), Lifebuoy(attached=True)
     world = build_world(parts=[human, ring])
     model, data = world.model, world.data
     ring_ids = np.flatnonzero(model.geom_bodyid == ring.body_id)
@@ -84,11 +87,11 @@ def test_humanoid_fits_hole_and_arms_extend_outside_without_penetration():
 
 def test_attached_ring_needs_human_first():
     with pytest.raises(ValueError, match="Human.build"):
-        build_world(parts=[Lifebuoy()])
+        build_world(parts=[Lifebuoy(attached=True)])
 
 
 @pytest.mark.parametrize("name,value", [("SEGMENTS", 2), ("TUBE_RADIUS", 0.5), ("MASS", -1)])
 def test_invalid_geometry_or_mass_is_rejected(monkeypatch, name, value):
     monkeypatch.setattr(config.Lifebuoy, name, value)
     with pytest.raises(ValueError):
-        build_world(parts=[Lifebuoy(attached=False)])
+        build_world(parts=[Lifebuoy(position=(0, 0, 1))])

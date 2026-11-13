@@ -27,7 +27,7 @@ class PullFixture:
         body = spec.worldbody.add_body(name=config.Names.TEST_TOW_BODY, pos=self.position)
         body.add_freejoint()
         body.add_geom(type=mujoco.mjtGeom.mjGEOM_SPHERE, size=[.06, 0, 0], mass=10.,
-                      rgba=[.2, .6, 1., 1.], contype=0, conaffinity=0)
+                      rgba=[.2, .6, 1., 1.], group=config.Groups.VISUAL, contype=0, conaffinity=0)
         body.add_site(name=config.Names.TOW_POINT_SITE, size=[.015, 0, 0])
 
     def bind(self, model):

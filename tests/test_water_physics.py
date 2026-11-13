@@ -127,16 +127,16 @@ def test_surface_towing_starts_slack_and_stays_afloat_for_ten_seconds():
 def test_person_and_ring_float_without_thrust_or_rope():
     human = Human(position=(0, 0, -.03))
     boat = Robot(position=(4, 0, .1))
-    water = Water(waves=(), floating_bodies=[config.Names.HUMAN_BODY])
-    world = build_world(parts=[water, boat, human, Lifebuoy()])
+    water = Water(waves=(), floating_bodies=[config.Names.HUMAN_BODY, config.Names.LIFEBUOY_BODY])
+    world = build_world(parts=[water, boat, human, Lifebuoy(attached=True)])
     for _ in range(2500):
         advance(world)
     assert -.6 < world.data.xpos[human.body_id, 2] < .4
     assert np.linalg.norm(body_velocity_w(world.model, world.data, human.body_id)[0]) < .05
-    assert world.model.body_subtreemass[human.body_id] == pytest.approx(72)
+    assert world.model.body_subtreemass[human.body_id] == pytest.approx(70)
 
 
 def test_overlapping_water_targets_are_rejected():
-    water = Water(waves=(), floating_bodies=[config.Names.HUMAN_BODY, config.Names.LIFEBUOY_BODY])
-    with pytest.raises(ValueError, match='독립'):
+    water = Water(waves=(), floating_bodies=[config.Names.HUMAN_BODY, config.Names.HUMAN_BODY])
+    with pytest.raises(ValueError, match='중복'):
         build_world(parts=[water, Robot(), Human(), Lifebuoy()])

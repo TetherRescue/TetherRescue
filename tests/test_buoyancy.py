@@ -5,6 +5,7 @@ import pytest
 mujoco = pytest.importorskip('mujoco')
 
 from sim.buoyancy import body_voxels
+from sim import config
 from sim.human import Human
 from sim.lifebuoy import Lifebuoy
 from sim.world import build_world
@@ -16,10 +17,10 @@ def sphere_model(*, duplicate=False, rotated=False):
     body.add_freejoint()
     if rotated:
         body.quat[:] = [2**-.5, 0, 0, 2**-.5]
-    body.add_geom(type=mujoco.mjtGeom.mjGEOM_SPHERE, size=[.2, 0, 0], mass=1)
+    body.add_geom(type=mujoco.mjtGeom.mjGEOM_SPHERE, size=[.2, 0, 0], mass=1, group=config.Groups.PHYSICS)
     if duplicate:
         child = body.add_body()
-        child.add_geom(type=mujoco.mjtGeom.mjGEOM_SPHERE, size=[.2, 0, 0], mass=1)
+        child.add_geom(type=mujoco.mjtGeom.mjGEOM_SPHERE, size=[.2, 0, 0], mass=1, group=config.Groups.PHYSICS)
     return spec.compile()
 
 
@@ -44,7 +45,9 @@ def test_human_ring_voxels_preserve_open_center_and_sufficient_volume():
     human = Human()
     world = build_world(parts=[human, Lifebuoy()])
     points, half, _ = body_voxels(world.model, human.body_id, .04)
-    displaced_mass = np.prod(half * 2) * len(points) * 1025
+    ring_id = world.model.body(config.Names.LIFEBUOY_BODY).id
+    ring_points, ring_half, _ = body_voxels(world.model, ring_id, .04)
+    displaced_mass = (np.prod(half * 2) * len(points) + np.prod(ring_half * 2) * len(ring_points)) * 1025
     assert 72 < displaced_mass < 110
     # 환 평면 중심에서 몸통 바깥·환 안쪽의 빈 공간은 채우지 않는다.
     empty = np.array([.35, 0, .18])
