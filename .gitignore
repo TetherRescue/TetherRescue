@@ -10,6 +10,7 @@ venv/
 results/
 checkpoints/
 *.mp4
+MUJOCO_LOG.TXT
 
 # ROS2
 ros2_ws/build/

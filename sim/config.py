@@ -27,6 +27,8 @@ import math
 class Names:
     # 무엇: 배(선체) 부품의 이름표.
     # 사용: 물(부력·저항을 이 배에 걸고, 배 무게 body_subtreemass 를 읽음), 로봇(추력을 이 배에 걸음)
+    WATER_SURFACE_GEOM = "water_surface"
+    APPROACH_TARGET_SITE = "approach_target"
     BOAT_BODY = "boat"
     # 무엇: 배에 붙은 자유 관절(freejoint)의 이름. free = 이동 3방향 + 회전 3방향이 모두 자유롭다는 뜻.
     #       이 관절이 없으면 배가 세상에 고정돼 움직이지 않는다.
@@ -58,8 +60,28 @@ class Names:
     HUMAN_BODY = "human"                 # 사람의 움직임·질량을 갖는 body
     HUMAN_FREE = "human_free"            # 사람이 자유롭게 이동·회전하는 관절
     HUMAN_GEOM = "human_geom"            # 사람 몸의 모양
-    HUMAN_TOW_SITE = "human_tow_point"    # 사람 쪽 줄 연결점 (위치는 별도 합의)
-    TETHER_TENDON = "tow_tendon"          # 배와 사람을 연결할 tendon
+    HUMAN_DETAIL_PREFIX = "human_detail"
+    HUMAN_HEAD_GEOM = "human_head"
+    HUMAN_ARM_L_GEOM = "human_arm_l"
+    HUMAN_ARM_R_GEOM = "human_arm_r"
+    HUMAN_LEG_L_GEOM = "human_leg_l"
+    HUMAN_LEG_R_GEOM = "human_leg_r"
+    HUMAN_GRIP_L_SITE = "human_grip_l"
+    HUMAN_GRIP_R_SITE = "human_grip_r"
+    LIFEBUOY_GRIP_L_SITE = "lifebuoy_grip_l"
+    LIFEBUOY_GRIP_R_SITE = "lifebuoy_grip_r"
+    HUMAN_RING_GRASP_EQ = "human_ring_grasp"
+    HUMAN_ARM_BODY_PREFIX = "human_arm_body"
+    HUMAN_ARM_JOINT_PREFIX = "human_arm_joint"
+    HUMAN_ARM_ACTUATOR_PREFIX = "human_arm_drive"
+    HUMAN_RING_WORN_EQ = "human_ring_worn"
+    TEST_TOW_BODY = "test_tow_driver"
+    HUMAN_TOW_SITE = "human_tow_point"    # 이전 초안의 예약 이름. 실제 로프는 구명환에 연결
+    TETHER_TENDON = "tow_tendon"          # 배와 구명환을 연결할 tendon
+    LIFEBUOY_BODY = "lifebuoy"
+    LIFEBUOY_FREE = "lifebuoy_free"       # 구명환 단독 시험 때만 사용하는 자유 관절
+    LIFEBUOY_GEOM_PREFIX = "lifebuoy_segment"
+    LIFEBUOY_TOW_SITE = "lifebuoy_tow_point"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -330,6 +352,16 @@ class WaterParams:
     REQUIRES = {"max_dt": 0.002}
 
 
+# 사람·고정 구명환의 실험용 물성. 실측·인체 타당성 검증 전 가정값.
+# 물 부피는 외형 합집합의 복셀로 계산하며 체중에 맞춰 강제로 부풀리지 않는다.
+class RescueWater:
+    VOXEL_SIZE = 0.04  # m; 부력 형상 샘플 간격
+    DRAG_LINEAR = (30.0, 40.0, 120.0)  # N·s/m, 사람 로컬 축
+    DRAG_CD = (0.8, 1.0, 1.0)
+    ROT_DRAG_LINEAR = (15.0, 20.0, 15.0)  # N·m·s/rad
+    ROT_DRAG_QUAD = (2.0, 2.0, 2.0)
+
+
 # ─────────────────────────────────────────────────────────────
 # 6. 소유권 — 같은 힘을 두 번 넣지 않기 위한 약속
 # ─────────────────────────────────────────────────────────────
@@ -418,12 +450,13 @@ class Groups:
 # ─────────────────────────────────────────────────────────────
 # 아래 수치는 실측·논문·팀 회의에서 확정한 값이 아니다. 단순 모델 구현을 시작하기 위해
 # 가영 작업 브랜치에 둔 가정값이며, 실제 사람을 정확히 재현한다는 뜻이 아니다.
-# human.py의 단순 강체 모델이 이 값을 읽는다. 사람 부력·줄 연결은 아직 미구현이다.
+# human.py가 이 값을 읽는다. 부력은 Water의 명시적 시험 대상으로 선택하고 줄은 구명환에 연결한다.
 class Human:
-    # 무엇: 몸 전체를 관절 없는 상자 하나로 단순화하는 첫 구현안.
-    # 사용: human.py의 geom 생성. 머리·팔다리·기도 모델은 아직 포함하지 않는다.
-    SHAPE = "box"
-    # 무엇: 상자의 전체 길이·폭·두께 [m]. MuJoCo box의 size는 반길이이므로
+    # humanoid: mesh 몸통·타원형 머리·분절 팔다리를 한 body에 고정한 시험용 모델.
+    # 관절 운동·기도·접촉 지지는 후속 작업. 기존 box도 Human(shape='box')로 시험 가능.
+    SHAPE = "humanoid"
+    # 아래 세 값은 기존 상자 시험 모드의 전체 길이·폭·두께 [m].
+    # MuJoCo box의 size는 반길이이므로
     # 구현할 때 (LENGTH/2, WIDTH/2, HEIGHT/2)를 전달해야 한다.
     # 사람 로컬 축 제안: +x 머리 쪽, +y 왼쪽, +z 몸의 앞면 쪽.
     # 월드에서 눕거나 서 있는 자세는 배치 시 회전으로 정한다 (아직 미정).
@@ -433,19 +466,66 @@ class Human:
     # 무엇: 사람 모델 전체 질량 [kg]. 단순 구현용 가정값이며 검증된 대표값이 아니다.
     # 질량은 human.py에서만 설정하고, 물 모듈이 이를 다시 추가하지 않는다.
     MASS = 70.0
-    # 무엇: 사람 body 원점 = 상자 중심, 무게중심도 같은 위치라는 단순화 [m].
-    # 몸체 로컬 좌표. 실제 인체의 질량 분포를 재현한 값이 아니다.
+    # 기존 box 모드에서만 지정하는 무게중심 [m].
+    # humanoid 모드의 무게중심·관성은 아래 부위별 형상·질량에서 MuJoCo가 계산한다.
     COM = (0.0, 0.0, 0.0)
-    # 무엇: 사람 쪽 줄 연결점의 몸체 로컬 좌표 [m].
-    # 미정: 연결 위치는 견인 자세에 영향을 주므로 동경·미현과 상의 후 채운다.
-    # None을 (0, 0, 0)으로 자동 대체하지 않는다.
+
+    # 아래 형상·질량 비율도 모두 검증 전 가정값이다. +x 머리, +y 왼쪽, +z 몸 앞면.
+    # 캡슐 좌표는 양 끝 구 중심 두 점이다 (튜브 반지름만큼 더 뻗어 나옴).
+    # 이전 캡슐 몸통의 참조값. 실제 몸통은 TORSO_SECTIONS_B로 생성한다.
+    TORSO_FROMTO_B = ((-0.12, 0.0, 0.0), (0.40, 0.0, 0.0))
+    TORSO_RADIUS = 0.14
+    HEAD_POS_B = (0.63, 0.0, 0.0)
+    HEAD_RADIUS = 0.12  # 이전 구형 머리의 참조값
+    HEAD_RADII = (0.125, 0.085, 0.10)
+    # x 위치별 (반폭, 반두께): 골반 → 허리 → 가슴 → 어깨 → 목 아래.
+    TORSO_SECTIONS_B = ((-.20, .13, .075), (-.08, .12, .075),
+                        (.15, .17, .10), (.36, .185, .09), (.44, .10, .065))
+    ELBOW_L_B = (.55, .40, -.015)
+    ELBOW_R_B = (.55, -.40, -.015)
+    KNEE_L_B = (-.51, .105, .015)
+    KNEE_R_B = (-.51, -.105, .015)
+    # 팔은 환보다 머리 쪽(+x)에 두고 양옆으로 뻗어 환의 바깥으로 나온다.
+    ARM_L_FROMTO_B = ((0.50, 0.14, 0.0), (0.46, 0.66, 0.02))
+    ARM_R_FROMTO_B = ((0.50, -0.14, 0.0), (0.46, -0.66, 0.02))
+    # 독립 전달 시험에서 사용하는 손 표면의 잡기 기준점 (검증 전 형상값).
+    GRIP_L_POINT_B = (ARM_L_FROMTO_B[1][0] + .022, ARM_L_FROMTO_B[1][1] + .035, ARM_L_FROMTO_B[1][2])
+    GRIP_R_POINT_B = (ARM_R_FROMTO_B[1][0] + .022, ARM_R_FROMTO_B[1][1] - .035, ARM_R_FROMTO_B[1][2])
+    ARM_RADIUS = 0.043
+    LEG_L_FROMTO_B = ((-0.20, 0.08, 0.0), (-0.85, 0.11, 0.0))
+    LEG_R_FROMTO_B = ((-0.20, -0.08, 0.0), (-0.85, -0.11, 0.0))
+    LEG_RADIUS = 0.067
+    # 순서: 몸통·머리·왼팔·오른팔·왼다리·오른다리. 합은 1, 총질량은 MASS 그대로.
+    # 팔은 위팔/아래팔/손 55/40/5%, 다리는 허벅지/정강이/발 57/38/5%로 분배.
+    MASS_FRACTIONS = (0.50, 0.08, 0.06, 0.06, 0.15, 0.15)
+    # 이전 직접 연결 초안의 예약 항목. 실제 로프는 구명환에 연결하므로 사용하지 않는다.
     TOW_POINT_B = None
+
+
+# 구명환 — 가영의 형상·연결 시험용 가정값. 실제 제품 사양·부력 검증값이 아니다.
+class Lifebuoy:
+    # 원형 중심선 반지름과 튜브 반지름 [m]. 바깥 지름 약 0.8m, 안쪽 약 0.5m.
+    # 실제 형상은 정다각형의 변을 캡슐로 둘러 근사하므로 안쪽 폭은 조금 작아진다.
+    CENTERLINE_RADIUS = 0.325
+    TUBE_RADIUS = 0.075
+    SEGMENTS = 12
+    # 손이 환의 가까운 테두리를 잡는 시험용 site. 로프 site와 별개다.
+    GRIP_L_POINT_B = (-TUBE_RADIUS, -CENTERLINE_RADIUS, 0.)
+    GRIP_R_POINT_B = (-TUBE_RADIUS, CENTERLINE_RADIUS, 0.)
+    # 전체 질량 [kg]. 캡슐 12개에 나눠 주며 12배로 증가시키지 않는다.
+    MASS = 2.0
+    # 고정 연결 시험: 사람 좌표에서 머리 쪽(+x)으로 0.35m인 상체 부근.
+    # 환은 사람의 x축에 수직인 yz 평면에 놓여 상자 몸통을 둘러싼다.
+    POSITION_IN_HUMAN_B = (0.35, 0.0, 0.0)
+    # 환 로컬 좌표의 로프 연결점 [m]. 현재는 환 표면의 시험 위치이며 정확한 묶음 위치는 조정 대상.
+    # 배를 +x 방향에 둔 시험을 가정: +x 쪽 튜브 표면, y가 양수인 테두리.
+    TOW_POINT_B = (TUBE_RADIUS, CENTERLINE_RADIUS, 0.0)
 
 
 # ─────────────────────────────────────────────────────────────
 # 9-2. 줄 모델 내부 설정 — 가영의 독립 구현용 시험 초안
 # ─────────────────────────────────────────────────────────────
-# 현재 tether.py는 빈 모듈이다. 아래 값은 스프링 실험의 출발점일 뿐,
+# 아래 값은 tendon 스프링·인장 감쇠 실험의 출발점일 뿐,
 # 합의·검증된 로프 사양이나 안정성을 보장하는 값이 아니다.
 class Tether:
     # 무엇: 줄이 늘어나지 않은 기준 길이 [m].
@@ -453,7 +533,7 @@ class Tether:
     REST_LENGTH = 2.0
     # 무엇: 늘어남에 대한 스프링 강성 [N/m].
     # 인장 스프링 예시: 0.1m 늘어나면 이 항의 크기는 100×0.1=10N.
-    # 느슨할 때 압축력을 없애는 방법은 tendon 구현 시 별도로 검증한다.
+    # tendon의 springlength=(0, REST_LENGTH)로 짧을 때 스프링 압축력을 없앤다.
     STIFFNESS = 100.0
     # 무엇: 줄 길이가 변하는 속도를 억제하는 감쇠 계수 [N·s/m].
     # 스프링의 출렁임을 줄이는 실험용 값. 감쇠는 강성과 다른 항이다.

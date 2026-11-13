@@ -83,6 +83,12 @@ def test_missing_contract_is_an_explicit_error(monkeypatch):
         build_world()
 
 
+def test_zero_gravity_can_be_requested_for_isolated_force_experiment():
+    world = build_world(parts=(), gravity=0.0)
+    np.testing.assert_array_equal(world.model.opt.gravity, 0)
+    assert config.Physics.GRAVITY == 9.81
+
+
 @pytest.mark.parametrize("field,value", [
     ("timestep", 0), ("timestep", float("nan")), ("gravity", -1),
     ("gravity", float("inf")), ("integrator", "unknown"),
