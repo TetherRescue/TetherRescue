@@ -93,12 +93,12 @@ def _free_rock(stiffness, inertia, damping, tilt0=math.radians(15), seconds=3.0,
 
 
 def test_restoring_stiffness_by_hand():
-    # 손 계산 값: 흘수 0.1016 m, KG(바닥→무게중심) 0.15 m
-    #   roll  GM = 0.0508 + 1.0²/(12·0.1016) − 0.15 ≈ 0.721 m → k ≈ 1768
-    #   pitch GM = 0.0508 + 2.4²/(12·0.1016) − 0.15 ≈ 4.625 m → k ≈ 11342
+    # 손 계산 값 (2026-11-13 선체 19.6 kg, 1.3 × 0.6 × 0.2 m): 흘수 0.0245 m, KG(바닥→무게중심) 0.0771 m
+    #   roll  GM = 0.01226 + 0.6²/(12·0.02452) − 0.0771 ≈ 1.159 m → k ≈ 222.8
+    #   pitch GM = 0.01226 + 1.3²/(12·0.02452) − 0.0771 ≈ 5.680 m → k ≈ 1092
     k_roll, k_pitch = water.restoring_stiffness(MASS)
-    assert k_roll == pytest.approx(1768, rel=0.01)
-    assert k_pitch == pytest.approx(11342, rel=0.01)
+    assert k_roll == pytest.approx(222.8, rel=0.01)
+    assert k_pitch == pytest.approx(1092, rel=0.01)
 
 
 def test_rot_drag_gives_target_damping_ratio():
@@ -120,16 +120,20 @@ def test_tilt_settles(axis, name):
 
 @pytest.mark.parametrize("axis", [0, 1])
 def test_old_small_coefficient_keeps_rocking(axis):
-    # 재발 방지: 예전 제안값 8.0 이면 3 초 뒤에도 처음의 절반 넘게 흔들림 (동경 님 지적 재현)
+    # 재발 방지: 예전 제안값 8.0 은 250 kg 배 기준 감쇠비 약 0.02 → 3 초 뒤에도 처음의 절반 넘게 흔들림
+    # (동경 님 지적 재현). 선체가 바뀌어도 같은 뜻이 되게 숫자 대신 감쇠비 0.02 로 계수를 만들고,
+    # 시간도 초 대신 흔들림 주기로 잰다 (가벼운 배는 주기가 짧아 3 초면 훨씬 많이 흔들림).
     k = water.restoring_stiffness(MASS)[axis]
-    history = _free_rock(k, INERTIA[axis], damping=8.0)
-    tail = history[-int(0.5 / config.Sim.TIMESTEP):]
+    damping = 2 * 0.02 * math.sqrt(k * INERTIA[axis])
+    period = 2 * math.pi * math.sqrt(INERTIA[axis] / k)
+    history = _free_rock(k, INERTIA[axis], damping=damping, seconds=4 * period)
+    tail = history[-int(period / config.Sim.TIMESTEP):]   # 마지막 한 주기
     assert np.max(np.abs(tail)) > 0.5 * math.radians(15)
 
 
 def test_unstable_hull_raises(monkeypatch):
-    # 무게중심이 너무 높으면 (GM ≤ 0) 바로 에러
-    monkeypatch.setattr(config.Hull, "COM", (0.0, 0.0, 1.0))
+    # 무게중심이 너무 높으면 (GM ≤ 0) 바로 에러. 1.0 m 위로는 이 선체 roll GM(BM ≈ 1.2 m)이 아직 양수라 2.0 m
+    monkeypatch.setattr(config.Hull, "COM", (0.0, 0.0, 2.0))
     with pytest.raises(ValueError, match="뒤집힘"):
         water.restoring_stiffness(MASS)
 

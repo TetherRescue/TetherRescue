@@ -1,7 +1,7 @@
 """1 물: 파도·복셀 부력·저항·부가질량 (담당: 미현).
 
 설정값은 전부 config.WaterParams(물 설정)·config.Physics(밀도·중력)·config.Hull(선체)에서 읽는다.
-이 파일에는 숫자를 직접 적지 않는다.
+물성 계수는 config에서 읽고, 복셀 적분의 수치 연산은 이 모듈에서 수행한다.
 """
 
 import math
@@ -301,84 +301,151 @@ class Water:
     # 요구사항은 config 한 곳에만 적고 여기서는 가져다 쓴다 (값을 두 곳에 두지 않기).
     REQUIRES = config.WaterParams.REQUIRES
 
-    def __init__(self, waves=config.WaterParams.WAVES_DEFAULT):
+    def __init__(self, waves=config.WaterParams.WAVES_DEFAULT, *, floating_bodies=(), surface_visual=False, include_boat=True):
         self.waves = waves
+        self.surface_visual = surface_visual
+        self.include_boat = include_boat
+        # 사람·구명환의 실험 부력은 명시적으로 선택한다. 선체 부력은 기본 적용.
+        self.floating_bodies = tuple(floating_bodies)
+        self.targets = []
 
     def wave_height(self, x, y, t):
         """이 물 객체의 파도로 계산한 수면 높이. 설명은 모듈 함수 wave_height 참고."""
         return wave_height(x, y, t, self.waves)
 
     def build(self, spec):
-        """세계 조립 때 자기 몸(body/geom 등)을 spec 에 추가한다.
-
-        물은 MuJoCo 안에 "물체"로 존재하지 않는다 (수면은 wave_height 함수일 뿐).
-        배(boat)와 선체 상자(hull)는 로봇(동경 robot.py)이 만든다. 그래서 여기서는 추가할 것이 없다.
-        """
+        """선택한 수면 표시는 접촉·질량이 없는 평면이다 (파도 변형은 미표시)."""
+        if self.surface_visual:
+            import mujoco
+            spec.worldbody.add_geom(name=config.Names.WATER_SURFACE_GEOM,
+                                    type=mujoco.mjtGeom.mjGEOM_PLANE,
+                                    pos=[0, 0, config.WaterParams.SURFACE_Z], size=[50, 50, .1],
+                                    rgba=[.06, .32, .45, .4], contype=0, conaffinity=0,
+                                    group=0 if config.Groups.VISUAL is None else config.Groups.VISUAL)
+            spec.worldbody.add_light(pos=[0, 0, 8], dir=[0, 0, -1], diffuse=[.7, .7, .7])
 
     def bind(self, model):
-        """시작할 때 한 번: 배를 찾고, 매 스텝 쓸 재료(복셀·저항 계수)를 미리 만들어 둔다.
+        """선체 복셀과 명시한 고정 연결 몸체의 합집합 복셀을 준비한다."""
+        from sim.buoyancy import body_voxels
+        import mujoco
 
-        이름 → 번호(id) 를 한 번만 찾는 이유: 매 스텝 이름으로 찾으면 느리고,
-        이름이 틀리면 −1 이 조용히 들어가 엉뚱한 곳에 힘이 걸리기 때문 → 없으면 assert 로 바로 멈춘다.
-        """
-        import mujoco  # MuJoCo 없는 환경에서도 이 파일 import(스모크 테스트)는 되도록 여기서 가져옴
-
-        def find(obj, name):
-            i = mujoco.mj_name2id(model, obj, name)
-            assert i >= 0, f"모델에 {name!r} 없음 — 로봇 build() 를 했는지, config.Names 와 같은지 확인"
-            return i
-
-        # 1) 배 몸체와 선체 상자의 번호
-        self.body_id = find(mujoco.mjtObj.mjOBJ_BODY, config.Names.BOAT_BODY)
-        hull_id = find(mujoco.mjtObj.mjOBJ_GEOM, config.Names.HULL_GEOM)
-
-        # 2) 선체 상자 확인 — 복셀은 "몸체 원점 = 상자 중심"을 전제로 자른다 (Frames.BODY_ORIGIN)
-        #    상자가 원점에서 벗어나 있거나 돌아가 있으면 부력이 엉뚱한 자리에 걸리므로 바로 멈춤
-        assert model.geom_type[hull_id] == mujoco.mjtGeom.mjGEOM_BOX, "hull 이 상자(box)가 아님"
-        assert np.allclose(model.geom_pos[hull_id], 0.0), "hull 상자 중심이 배 원점과 다름"
-        assert np.allclose(model.geom_quat[hull_id], (1, 0, 0, 0)), "hull 상자가 배 기준으로 돌아가 있음"
-
-        # 3) 선체 크기는 MuJoCo 모델에서 읽는다 (MuJoCo box 크기는 절반 길이 → ×2).
-        #    저항 단면적은 config.Hull 값을 쓰므로 둘이 같은지도 확인 (다르면 조용히 틀림)
-        size = 2.0 * model.geom_size[hull_id]
-        hull_cfg = (config.Hull.LENGTH, config.Hull.BEAM, config.Hull.HEIGHT)
-        assert np.allclose(size, hull_cfg), f"모델 선체 크기 {size} ≠ config.Hull {hull_cfg}"
-
-        # 4) 배 무게·관성도 모델에서 읽는다 (물은 질량을 정하지 않음, 소유자 = 로봇)
-        #    body_subtreemass = 이 몸체 + 그 아래 붙은 부품까지 합친 무게
-        mass = float(model.body_subtreemass[self.body_id])
-        inertia = model.body_inertia[self.body_id].copy()  # (roll, pitch, yaw) 축 관성
-
-        # 5) 매 스텝 쓸 재료를 미리 만들기 (배 모양·무게는 안 변하니 한 번이면 충분)
-        self.voxels = make_voxels(size=size)               # 128 칸의 위치·크기·부피
-        self.drag_coeffs = drag_coefficients(mass, inertia)  # 저항 계수들
-
-        # 디버깅·로봇 연동용으로 마지막 스텝 값을 남겨 둠 (add_forces 가 채움)
+        if config.WaterParams.ADDED_MASS_ENABLED is not False:
+            raise ValueError("부가질량은 아직 지원하지 않습니다.")
+        self.targets = []
+        seen = set()
+        # 로봇 담당 PR 머지 전에도 쓰던 값: 미현 테스트·뷰어가 읽는 배 번호·복셀·잠긴 부피
+        self.body_id = None
+        self.voxels = None
         self.submerged_volume = 0.0
+        if self.include_boat:
+            def find(obj, name):
+                # 이름이 틀리면 −1 이 조용히 들어가지 않도록 assert 로 바로 멈춘다
+                i = mujoco.mj_name2id(model, obj, name)
+                assert i >= 0, f"모델에 {name!r} 없음 — 로봇 build() 를 했는지, config.Names 와 같은지 확인"
+                return i
+
+            body_id = find(mujoco.mjtObj.mjOBJ_BODY, config.Names.BOAT_BODY)
+            geom_id = find(mujoco.mjtObj.mjOBJ_GEOM, config.Names.HULL_GEOM)
+            if model.geom_bodyid[geom_id] != body_id or int(model.geom_type[geom_id]) != int(mujoco.mjtGeom.mjGEOM_BOX):
+                raise ValueError("선체 부력에는 boat body에 속한 box hull이 필요합니다.")
+            counts = np.asarray(config.WaterParams.VOXEL_RES, dtype=int)
+            if counts.shape != (3,) or np.any(counts < 1):
+                raise ValueError("VOXEL_RES는 양의 정수 3개여야 합니다.")
+            # hull geom의 회전은 지원하지 않는다 (위치는 body 좌표로 반영).
+            rotation = np.empty(9)
+            mujoco.mju_quat2Mat(rotation, model.geom_quat[geom_id])
+            if not np.allclose(rotation.reshape(3, 3), np.eye(3)):
+                raise ValueError("현재 선체 부력은 body 축과 정렬된 box hull만 지원합니다.")
+            size = 2 * model.geom_size[geom_id]
+            # 선체 상자를 VOXEL_RES 칸으로 자른다 (make_voxels: 중심, 칸 크기, 칸 부피)
+            self.body_id = body_id
+            self.voxels = make_voxels(size=size)
+            points = self.voxels[0] + model.geom_pos[geom_id]
+            mass = model.body_subtreemass[body_id]
+            linear = np.array([*config.WaterParams.DRAG_LINEAR[:2],
+                               2 * config.WaterParams.HEAVE_DAMPING_RATIO * np.sqrt(
+                                   mass * config.Physics.RHO_WATER * np.linalg.norm(model.opt.gravity)
+                                   * size[0] * size[1])])
+            self.targets.append(self._target(body_id, points, self.voxels[1] / 2, size, linear,
+                                            rot_drag_linear(mass, model.body_inertia[body_id]),
+                                            config.WaterParams.DRAG_CD,
+                                            config.WaterParams.ROT_DRAG_QUAD))
+            seen.add(body_id)
+        for name in self.floating_bodies:
+            extra_id = model.body(name).id
+            if extra_id in seen or extra_id == 0:
+                raise ValueError("부력 대상 몸체가 중복되거나 world입니다.")
+            # 부모와 자식을 동시에 지정하면 같은 부피에 힘을 두 번 넣게 된다.
+            for other in seen:
+                for child, ancestor in ((extra_id, other), (other, extra_id)):
+                    while child and child != ancestor:
+                        child = int(model.body_parentid[child])
+                    if child == ancestor:
+                        raise ValueError("부력 대상은 서로 독립된 몸체여야 합니다.")
+            seen.add(extra_id)
+            points, half, dimensions = body_voxels(model, extra_id, config.RescueWater.VOXEL_SIZE)
+            self.targets.append(self._target(extra_id, points, half, dimensions,
+                                            config.RescueWater.DRAG_LINEAR,
+                                            config.RescueWater.ROT_DRAG_LINEAR,
+                                            config.RescueWater.DRAG_CD,
+                                            config.RescueWater.ROT_DRAG_QUAD))
+
+    @staticmethod
+    def _target(body_id, points, half, dimensions, linear, angular, cd, angular_quad):
+        coefficients = np.asarray([linear, angular, cd, angular_quad], dtype=float)
+        if coefficients.shape != (4, 3) or not np.isfinite(coefficients).all() or np.any(coefficients < 0):
+            raise ValueError("물 저항 계수는 유한한 0 이상 값이어야 합니다.")
+        return dict(body_id=body_id, points=points, half=half,
+                    cell_volume=float(np.prod(half * 2)), dimensions=dimensions,
+                    linear=coefficients[0], angular=coefficients[1],
+                    cd=coefficients[2], angular_quad=coefficients[3])
 
     def add_forces(self, model, data, acc):
-        """매 스텝(0.002 초마다): 부력과 물 저항을 acc(ForceAccumulator)에 넣는다. 전부 월드 좌표.
+        """부력은 잠긴 복셀 중심에, 저항은 현재 물 상대 속도에 적용한다.
 
-        넣기만 하고 MuJoCo 에 직접 쓰지 않는다 (xfrc_applied 는 forces.py 만 쓰는 규칙).
+        회전된 복셀의 수직 투영 높이로 부분 침수를 근사한다.
+        파도는 수면 높이만 바꾸며 물 입자의 파도 속도는 아직 계산하지 않는다.
         """
-        bid = self.body_id
+        from sim.frames import body_to_world, world_to_body, point_body_to_world, body_velocity_w
 
-        # ── 1) 부력 ──
-        forces_w, points_w, self.submerged_volume = voxel_buoyancy(
-            data, bid, waves=self.waves, voxels=self.voxels
-        )
-        total = forces_w[:, 2].sum()  # 128 칸 부력의 합 [N] (모두 위쪽)
-        if total > 0.0:
-            # 128 칸 힘을 하나씩 넣는 대신 "부력 중심" 한 점에 합친 힘 하나를 넣는다.
-            #   부력 중심 = 칸마다의 작용점을 부력 크기로 가중 평균한 점
-            # 모든 칸의 부력이 같은 방향(위)이라 이렇게 합쳐도 힘·토크가 정확히 같다 (평행한 힘의 합성).
-            #   → 결과는 같고 acc 에 넣는 횟수만 128 번 → 1 번으로 줄어 빠름.
-            # ⚠️ 1단계 설명의 "한 점 부력"(PoC 실패)과 다름: 그건 중심을 고정해서 기울어도 안 움직였고,
-            #    이건 매 스텝 칸마다 계산한 결과라 배가 기울면 부력 중심이 잠긴 쪽으로 옮겨 가 배를 세운다.
-            center_w = (forces_w[:, 2] @ points_w) / total
-            acc.add(bid, (0.0, 0.0, total), point_w=center_w)
-
-        # ── 2) 물 저항 (이동 + 회전) ──
-        # 힘은 무게중심에 걸고(point_w 생략), 회전 저항은 순수 토크(torque_w)로 넣는다
-        drag_force_w, drag_torque_w = water_drag(model, data, bid, self.drag_coeffs)
-        acc.add(bid, drag_force_w, torque_w=drag_torque_w)
+        gravity = float(np.linalg.norm(model.opt.gravity))
+        if model.opt.gravity[0] != 0 or model.opt.gravity[1] != 0 or model.opt.gravity[2] > 0:
+            raise ValueError("물 모듈은 월드 -z 방향 중력만 지원합니다.")
+        rho = config.Physics.RHO_WATER
+        current = np.asarray(config.WaterParams.WATER_VELOCITY_W, dtype=float)
+        if current.shape != (3,) or not np.isfinite(current).all():
+            raise ValueError("물 속도는 유한한 월드 벡터여야 합니다.")
+        self.submerged_volume = 0.0
+        for target in self.targets:
+            body_id = target['body_id']
+            points_w = point_body_to_world(data, body_id, target['points'])
+            rotation = data.xmat[body_id].reshape(3, 3)
+            height = 2 * (np.abs(rotation[2]) @ target['half'])
+            surface = self.wave_height(points_w[:, 0], points_w[:, 1], data.time)
+            wet = np.clip(.5 + (surface - points_w[:, 2]) / height, 0, 1)
+            total_wet = float(wet.sum())
+            if total_wet == 0:
+                continue
+            volume = total_wet * target['cell_volume']
+            if body_id == self.body_id:
+                self.submerged_volume = volume  # 뷰어·디버깅용 (배의 잠긴 부피)
+            # 부분 침수 복셀의 잠긴 부분 중심. 직립 box에서는 정확한 부력 중심이다.
+            centers_w = points_w.copy()
+            centers_w[:, 2] += (wet - 1) * height / 2
+            center_w = np.sum(centers_w * wet[:, None], axis=0) / total_wet
+            acc.add(body_id, [0, 0, rho * gravity * volume], point_w=center_w)
+            velocity_w, omega_w = body_velocity_w(model, data, body_id)
+            velocity_b = world_to_body(data, body_id, velocity_w - current)
+            omega_b = world_to_body(data, body_id, omega_w)
+            wet_ratio = total_wet / len(wet)
+            # 평형 잠김량에서는 감쇠비 계약값이 그대로 적용되고, 물 밖에서는 사라진다.
+            damping_scale = min(1., volume * rho / model.body_subtreemass[body_id])
+            dimensions = target['dimensions']
+            areas = np.array([dimensions[1] * dimensions[2], dimensions[0] * dimensions[2],
+                              dimensions[0] * dimensions[1]]) * wet_ratio
+            drag_b = (-target['linear'] * damping_scale * velocity_b
+                      - .5 * rho * target['cd'] * areas * np.abs(velocity_b) * velocity_b)
+            torque_b = (-target['angular'] * omega_b
+                        - target['angular_quad'] * np.abs(omega_b) * omega_b) * damping_scale
+            acc.add(body_id, body_to_world(data, body_id, drag_b),
+                    torque_w=body_to_world(data, body_id, torque_b))

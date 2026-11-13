@@ -10,6 +10,8 @@ from sim import config, frames
 from sim.config import Hull, Names, Thruster
 from sim.forces import ForceAccumulator
 from sim.robot import Robot
+from sim.world import build_world, advance_world as advance
+from sim.frames import body_velocity_w
 
 
 def _compile():
@@ -155,3 +157,102 @@ def test_steer_positive_turns_left():
     _run(model, data, robot, 0.5)
     _, ang_w = frames.body_velocity_w(model, data, robot.body_id)
     assert ang_w[2] > 0.1
+
+
+# ── 노즐이 물 밖이면 추력 0 (Robot(surface_height=...)) ─────────
+def test_nozzles_submerged_in_calm_water():
+    # 잔잔한 물에 흘수만큼 띄운 시작 자세 → 바닥의 노즐 둘 다 물속
+    from sim import water
+    model, data, robot = _robot_world()
+    robot.surface_height = lambda x, y, t: water.wave_height(x, y, t, config.WaterParams.WAVES_CALM)
+    assert robot.nozzles_submerged(data) == (True, True)
+
+
+def test_dry_nozzle_gives_no_thrust():
+    # 왼쪽(+y) 노즐만 수면 위 → 오른쪽 추력만 걸림 → 전진 명령에도 왼쪽으로 돎
+    model, data, robot = _robot_world()
+    robot.surface_height = lambda x, y, t: np.where(np.asarray(y) > 0, -10.0, 10.0)
+    assert robot.nozzles_submerged(data) == (False, True)
+    robot.set_command(1.0)
+    _run(model, data, robot, 0.5)
+    _, ang_w = frames.body_velocity_w(model, data, robot.body_id)
+    assert ang_w[2] > 0.1
+
+
+def test_no_surface_height_keeps_week1_assumption():
+    # surface_height 없으면 1주차 가정 그대로 "항상 물속" (WaterAPI.USE_IN_WEEK1 = False)
+    model, data, robot = _robot_world()
+    data.qpos[robot.qpos_adr + 2] = 100.0   # 물 위 높이 올려도
+    mujoco.mj_forward(model, data)
+    assert robot.nozzles_submerged(data) == (True, True)
+
+
+# 기존 세계 조립·접근 제어 API와의 호환 검증.
+def make_robot():
+    robot = Robot()
+    return build_world(parts=[robot], gravity=0), robot
+
+
+def test_hull_mass_geometry_and_optional_tow_site():
+    world, robot = make_robot()
+    assert world.model.body_subtreemass[robot.body_id] == pytest.approx(config.Hull.MASS)
+    np.testing.assert_allclose(world.model.geom_size[robot.geom_id],
+                               np.array([config.Hull.LENGTH, config.Hull.BEAM, config.Hull.HEIGHT]) / 2)
+    np.testing.assert_allclose(world.model.body_ipos[robot.body_id], config.Hull.COM)
+    assert world.model.nsite == 3  # main의 합의된 선미 연결점을 기본 생성한다.
+
+
+@pytest.mark.parametrize('command,force', [(1, 2 * config.Thruster.MAX_FORWARD),
+                                            (-1, -2 * config.Thruster.MAX_REVERSE), (0, 0)])
+def test_actual_forward_reverse_acceleration(command, force):
+    world, robot = make_robot()
+    robot.set_command(command)
+    advance(world)
+    assert body_velocity_w(world.model, world.data, robot.body_id)[0][0] / world.model.opt.timestep == pytest.approx(force / config.Hull.MASS)
+
+
+def test_yaw_ninety_forward_accelerates_world_y():
+    world, robot = make_robot()
+    address = world.model.jnt_qposadr[robot.joint_id]
+    world.data.qpos[address + 3:address + 7] = [2**-.5, 0, 0, 2**-.5]
+    robot.set_command(1)
+    advance(world)
+    dof = world.model.jnt_dofadr[robot.joint_id]
+    assert world.data.qvel[dof] == pytest.approx(0, abs=1e-12)
+    assert body_velocity_w(world.model, world.data, robot.body_id)[0][1] / world.model.opt.timestep == pytest.approx(2 * config.Thruster.MAX_FORWARD / config.Hull.MASS)
+
+
+def test_positive_steering_turns_left_and_mixing_saturates():
+    world, robot = make_robot()
+    robot.set_command(steering=1)
+    advance(world)
+    dof = world.model.jnt_dofadr[robot.joint_id]
+    assert world.data.qvel[dof + 5] > 0
+    world, robot = make_robot()
+    robot.set_command(forward=1, steering=1)
+    advance(world)
+    assert body_velocity_w(world.model, world.data, robot.body_id)[0][0] / world.model.opt.timestep == pytest.approx(config.Thruster.MAX_FORWARD / config.Hull.MASS)
+
+
+@pytest.mark.parametrize('value', [float('nan'), float('inf')])
+def test_nonfinite_commands_rejected(value):
+    with pytest.raises(ValueError):
+        Robot().set_command(value)
+
+
+@pytest.mark.parametrize('forward,steering', [(.3, -.2), (2., -2.), (-1., .4)])
+def test_navigation_command_aliases_match_main_throttle_contract(forward, steering):
+    original, compatible = Robot(), Robot()
+    original.set_command(forward, steering)
+    compatible.set_command(forward=forward, steering=steering)
+    assert compatible.thrusts() == original.thrusts()
+    np.testing.assert_array_equal(compatible._commands, original._commands)
+
+
+def test_explicit_trial_placement_and_tow_site_do_not_change_main_default():
+    position = (3., 2., .7)
+    point = (-Hull.LENGTH / 2, 0., .05)
+    robot = Robot(position=position, tow_point_b=point)
+    world = build_world(parts=[robot], gravity=0)
+    np.testing.assert_allclose(world.data.xpos[robot.body_id], position)
+    np.testing.assert_allclose(world.model.site_pos[robot.tow_site_id], point)

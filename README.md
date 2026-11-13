@@ -21,6 +21,9 @@
 
 ```
 sim/      시뮬레이터 모듈 (config·forces·frames는 계약 파일)
+          scenarios.py: 잡기·착용 장면 및 시험 장치 (GUI 없이 사용 가능)
+          view_*.py: 시연별 실행 옵션·화면·카메라
+          world.py: 세계 조립·공통 물리 스텝 / rope_visual.py: 공통 로프 표시
 tests/    단위·통합 테스트, 속도 측정
 docs/     CONTRACT.md(계약), PARAMETERS.md(파라미터 근거)
 ```
