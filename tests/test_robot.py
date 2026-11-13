@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from sim import config, frames
-from sim.config import Hull, Names, Thruster
+from sim.config import Hull, Names, Sensors, Thruster
 from sim.forces import ForceAccumulator
 from sim.robot import Robot
 from sim.world import build_world, advance_world as advance
@@ -35,8 +35,9 @@ def test_build_names_exist():
     j = _id(model, mujoco.mjtObj.mjOBJ_JOINT, Names.BOAT_FREE)
     assert model.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE
     _id(model, mujoco.mjtObj.mjOBJ_GEOM, Names.HULL_GEOM)
-    for site in (Names.THRUSTER_L_SITE, Names.THRUSTER_R_SITE, Names.TOW_POINT_SITE):
+    for site in (Names.THRUSTER_L_SITE, Names.THRUSTER_R_SITE, Names.TOW_POINT_SITE, Names.SONAR_SITE):
         _id(model, mujoco.mjtObj.mjOBJ_SITE, site)
+    _id(model, mujoco.mjtObj.mjOBJ_CAMERA, Names.CAMERA_BOW)
 
 
 def test_build_mass_and_inertia_match_config():
@@ -61,8 +62,22 @@ def test_build_site_positions_match_config():
     model, _ = _compile()
     for name, pos in ((Names.THRUSTER_L_SITE, Thruster.POS_L_B),
                       (Names.THRUSTER_R_SITE, Thruster.POS_R_B),
-                      (Names.TOW_POINT_SITE, Hull.TOW_POINT_B)):
+                      (Names.TOW_POINT_SITE, Hull.TOW_POINT_B),
+                      (Names.SONAR_SITE, Sensors.SONAR_POS_B)):
         np.testing.assert_allclose(model.site_pos[_id(model, mujoco.mjtObj.mjOBJ_SITE, name)], pos)
+
+
+def test_camera_looks_forward_from_bow():
+    # 카메라는 선수 위(Sensors.CAMERA_POS_B)에서 배 앞(+x_b)을 봄. MuJoCo 카메라는 자기 −z 로 봄
+    model, data = _compile()
+    c = _id(model, mujoco.mjtObj.mjOBJ_CAMERA, Names.CAMERA_BOW)
+    np.testing.assert_allclose(model.cam_pos[c], Sensors.CAMERA_POS_B)
+    view = -data.cam_xmat[c].reshape(3, 3)[:, 2]    # 보는 방향 (시작 자세는 몸체 = 월드 방향)
+    up = data.cam_xmat[c].reshape(3, 3)[:, 1]       # 화면 위
+    pitch = Sensors.CAMERA_PITCH_DOWN or 0.0
+    np.testing.assert_allclose(view, (np.cos(pitch), 0, -np.sin(pitch)), atol=1e-9)
+    assert up[2] > 0.9   # 화면이 뒤집히지 않음
+    assert Sensors.CAMERA_POS_B[2] > Hull.HEIGHT / 2   # 선체 윗면 위 (물에 안 잠김)
 
 
 def test_build_starts_at_draft():
@@ -199,7 +214,7 @@ def test_hull_mass_geometry_and_optional_tow_site():
     np.testing.assert_allclose(world.model.geom_size[robot.geom_id],
                                np.array([config.Hull.LENGTH, config.Hull.BEAM, config.Hull.HEIGHT]) / 2)
     np.testing.assert_allclose(world.model.body_ipos[robot.body_id], config.Hull.COM)
-    assert world.model.nsite == 3  # main의 합의된 선미 연결점을 기본 생성한다.
+    assert world.model.nsite == 4  # 추진기 2 + main의 합의된 선미 연결점 + 소나 자리
 
 
 @pytest.mark.parametrize('command,force', [(1, 2 * config.Thruster.MAX_FORWARD),

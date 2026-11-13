@@ -3,7 +3,7 @@ import mujoco
 import numpy as np
 
 from sim import config, frames
-from sim.config import Hull, Names, Thruster
+from sim.config import Hull, Names, Sensors, Thruster
 
 SITE_SIZE = (0.03,)   # 점(site) 표시 크기 [m]. 그림용이라 물리에 영향 없음
 
@@ -67,6 +67,8 @@ class Robot:
           hull      선체 상자. 물이 이 크기를 읽어 부력을 계산
           thr_l/r   추진기 점 (Thruster.POS_L_B/R_B)
           tow_point 줄 묶는 점 (Hull.TOW_POINT_B)
+          cam_bow   앞을 보는 카메라 (Sensors.CAMERA_POS_B). 일반 영상만, 열화상은 THERMAL_ENABLED 때
+          sonar     소나 자리 점 (Sensors.SONAR_POS_B). 1주차는 자리만 (SONAR_ENABLED = False)
         시작 높이는 정수 흘수만큼 잠긴 자리 → 물을 켜도 처음부터 거의 가만히 떠 있음.
         """
         if Thruster.METHOD != Thruster.ACC:
@@ -97,6 +99,16 @@ class Robot:
         body.add_site(name=Names.THRUSTER_L_SITE, pos=Thruster.POS_L_B, size=SITE_SIZE)
         body.add_site(name=Names.THRUSTER_R_SITE, pos=Thruster.POS_R_B, size=SITE_SIZE)
         body.add_site(name=Names.TOW_POINT_SITE, pos=Hull.TOW_POINT_B if self.tow_point_b is None else self.tow_point_b, size=SITE_SIZE)
+        body.add_site(name=Names.SONAR_SITE, pos=Sensors.SONAR_POS_B, size=SITE_SIZE)
+
+        # MuJoCo 카메라는 자기 −z 로 보고 +y 가 화면 위. 몸체(FLU)로 쓰면
+        #   화면 오른쪽 = −y_b, 화면 위 = (sin p, 0, cos p), 보는 방향 = (cos p, 0, −sin p)  (p = 아래로 숙인 각)
+        pitch = Sensors.CAMERA_PITCH_DOWN or 0.0   # 비전 담당과 합의 전엔 수평
+        cam = body.add_camera(name=Names.CAMERA_BOW, pos=Sensors.CAMERA_POS_B)
+        cam.alt.type = mujoco.mjtOrientation.mjORIENTATION_XYAXES
+        cam.alt.xyaxes = (0.0, -1.0, 0.0, np.sin(pitch), 0.0, np.cos(pitch))
+        if Sensors.CAMERA_FOVY is not None:   # 합의 전엔 MuJoCo 기본 45°
+            cam.fovy = Sensors.CAMERA_FOVY
         return body
 
     def bind(self, model):
@@ -119,6 +131,8 @@ class Robot:
         self.thr_l_site_id = find(mujoco.mjtObj.mjOBJ_SITE, Names.THRUSTER_L_SITE)
         self.thr_r_site_id = find(mujoco.mjtObj.mjOBJ_SITE, Names.THRUSTER_R_SITE)
         self.tow_site_id = find(mujoco.mjtObj.mjOBJ_SITE, Names.TOW_POINT_SITE)
+        self.sonar_site_id = find(mujoco.mjtObj.mjOBJ_SITE, Names.SONAR_SITE)
+        self.camera_id = find(mujoco.mjtObj.mjOBJ_CAMERA, Names.CAMERA_BOW)
         self.joint_id = free_id
         self.geom_id = self.hull_geom_id
         self.site_ids = (self.thr_l_site_id, self.thr_r_site_id)
