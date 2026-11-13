@@ -219,7 +219,9 @@ def test_moving_fixture_without_delivery_never_tows_the_person():
     for _ in range(2500):
         demo.step()
         maximum_tension = max(maximum_tension, demo.rope.tension(demo.world.model, demo.world.data))
-    np.testing.assert_allclose(demo.world.data.xpos[demo.human.body_id], start, atol=1e-10)
+    # 사람–구명환 접촉이 켜져 있어 끌려가는 환이 왼쪽 아래팔을 잠깐 스친다 (약 1.7 mm 밀림).
+    # 줄이 사람을 끄는 것과는 다르므로 cm 단위 이동만 견인으로 본다.
+    np.testing.assert_allclose(demo.world.data.xpos[demo.human.body_id], start, atol=5e-3)
     assert np.linalg.norm(demo.world.data.xpos[demo.ring.body_id] - ring_start) > .05
     assert maximum_tension > 1
     assert not demo.grasp.is_held(demo.world.data)

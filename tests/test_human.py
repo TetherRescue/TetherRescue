@@ -29,7 +29,9 @@ def test_build_and_bind_preserve_mass_shape_and_free_joint():
     np.testing.assert_allclose(model.body_inertia[human.body_id],
                                [1.1666666666666667, 17.091666666666665, 17.791666666666668])
     np.testing.assert_allclose(world.data.xipos[human.body_id], [2, 3, 4])
-    assert model.geom_contype[human.geom_id] == model.geom_conaffinity[human.geom_id] == 0
+    # 사람–배·구명환 접촉은 기본으로 켠다 (config.Contacts)
+    assert model.geom_contype[human.geom_id] == config.Contacts.HUMAN
+    assert model.geom_conaffinity[human.geom_id] == config.Contacts.HUMAN_AFFINITY
     assert model.nsite == 0 and model.ntendon == 0
 
 
