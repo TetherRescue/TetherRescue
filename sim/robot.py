@@ -11,9 +11,15 @@ SITE_SIZE = (0.03,)   # 점(site) 표시 크기 [m]. 그림용이라 물리에 �
 class Robot:
     REQUIRES = {}  # 예: {"max_dt": 0.004}
 
-    def __init__(self):
+    def __init__(self, surface_height=None):
+        """surface_height: 수면 높이 함수 (x, y, t) -> z, 예: Water().wave_height. x, y 는 배열로 받음.
+
+        None 이면 1주차 가정 "노즐은 항상 물속" (WaterAPI.USE_IN_WEEK1 = False).
+        주면 노즐이 수면 위로 나온 스텝에는 그 노즐 추력을 0 으로 한다 (Thruster.FULL_THRUST_DEPTH 주석).
+        """
         self.throttle = 0.0   # 전진 명령 (−1 최대 후진 ~ +1 최대 전진)
         self.steer = 0.0      # 조향 명령 (+ 왼쪽으로 돎)
+        self.surface_height = surface_height
 
     def set_command(self, throttle, steer=0.0):
         """추진 명령을 저장한다 (태수 PhaseManager 가 부름). 범위 밖이면 CMD_RANGE 로 자름."""
@@ -98,12 +104,23 @@ class Robot:
         assert abs(model.body_mass[self.body_id] - Hull.MASS) < 1e-9, (
             f"모델 배 무게 {model.body_mass[self.body_id]} kg ≠ config.Hull.MASS {Hull.MASS} kg")
 
+    def nozzles_submerged(self, data):
+        """(왼쪽, 오른쪽) 노즐이 수면 아래인지. surface_height 가 없으면 항상 (True, True)."""
+        if self.surface_height is None:
+            return (True, True)
+        pos = data.site_xpos[[self.thr_l_site_id, self.thr_r_site_id]]
+        surface = self.surface_height(pos[:, 0], pos[:, 1], data.time)   # 두 점을 한 번에 (WAVE_HEIGHT_VECTORIZED)
+        return tuple(bool(z < s) for z, s in zip(pos[:, 2], surface))
+
     def add_forces(self, model, data, acc):
         """스텝마다 힘을 acc(ForceAccumulator)에 더한다. 월드 좌표.
 
         추력은 배 앞쪽(+x_b) 방향 → body_to_world 로 월드 방향으로 돌리고,
         추진기 점의 월드 위치(site_xpos)에 건다. 점이 무게중심에서 벗어나 있으니 돌림힘은 acc 가 계산.
         """
-        for site_id, thrust in zip((self.thr_l_site_id, self.thr_r_site_id), self.thrusts()):
+        for site_id, thrust, wet in zip((self.thr_l_site_id, self.thr_r_site_id), self.thrusts(),
+                                        self.nozzles_submerged(data)):
+            if not wet:
+                continue   # 노즐이 공기 중이면 물을 못 밀어 추력 없음
             force_w = frames.body_to_world(data, self.body_id, (thrust, 0.0, 0.0))
             acc.add(self.body_id, force_w, point_w=data.site_xpos[site_id].copy())

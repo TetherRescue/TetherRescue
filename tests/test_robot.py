@@ -155,3 +155,31 @@ def test_steer_positive_turns_left():
     _run(model, data, robot, 0.5)
     _, ang_w = frames.body_velocity_w(model, data, robot.body_id)
     assert ang_w[2] > 0.1
+
+
+# ── 노즐이 물 밖이면 추력 0 (Robot(surface_height=...)) ─────────
+def test_nozzles_submerged_in_calm_water():
+    # 잔잔한 물에 흘수만큼 띄운 시작 자세 → 바닥의 노즐 둘 다 물속
+    from sim import water
+    model, data, robot = _robot_world()
+    robot.surface_height = lambda x, y, t: water.wave_height(x, y, t, config.WaterParams.WAVES_CALM)
+    assert robot.nozzles_submerged(data) == (True, True)
+
+
+def test_dry_nozzle_gives_no_thrust():
+    # 왼쪽(+y) 노즐만 수면 위 → 오른쪽 추력만 걸림 → 전진 명령에도 왼쪽으로 돎
+    model, data, robot = _robot_world()
+    robot.surface_height = lambda x, y, t: np.where(np.asarray(y) > 0, -10.0, 10.0)
+    assert robot.nozzles_submerged(data) == (False, True)
+    robot.set_command(1.0)
+    _run(model, data, robot, 0.5)
+    _, ang_w = frames.body_velocity_w(model, data, robot.body_id)
+    assert ang_w[2] > 0.1
+
+
+def test_no_surface_height_keeps_week1_assumption():
+    # surface_height 없으면 1주차 가정 그대로 "항상 물속" (WaterAPI.USE_IN_WEEK1 = False)
+    model, data, robot = _robot_world()
+    data.qpos[robot.qpos_adr + 2] = 100.0   # 물 위 높이 올려도
+    mujoco.mj_forward(model, data)
+    assert robot.nozzles_submerged(data) == (True, True)
