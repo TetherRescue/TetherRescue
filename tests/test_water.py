@@ -269,7 +269,10 @@ def test_pitch_restores(deg):
 # ─────────────────────────────────────────────────────────────
 # 5. 물 저항
 # ─────────────────────────────────────────────────────────────
-COEFFS = water.drag_coefficients(config.Hull.MASS, config.Hull.INERTIA)
+# Water.add_forces 와 같은 경로: 완전히 잠긴 기준 계수 → 흘수만큼 잠긴 상태로 줄이기
+# (똑바로 흘수에 떠 있으면 wet_ratio = 흘수 / 높이, damping_scale = 1)
+BASE_COEFFS = water.boat_drag_coefficients(config.Hull.MASS, config.Hull.INERTIA)
+COEFFS = water.wetted_drag(BASE_COEFFS, config.Expect.DRAFT / config.Hull.HEIGHT, 1.0)
 
 
 def _moving_boat(yaw_deg=0.0, vel_w=(0.0, 0.0, 0.0), omega_b=(0.0, 0.0, 0.0)):

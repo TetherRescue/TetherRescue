@@ -119,13 +119,16 @@ def make_voxels(size=None, res=None):
     return centers_b, cell_size, float(np.prod(cell_size))
 
 
-def voxel_buoyancy(data, body_id, t=None, waves=config.WaterParams.WAVES_DEFAULT, voxels=None):
-    """지금 MuJoCo 상태(data)에서 배의 칸마다 부력과 작용점 (월드 좌표).
+def voxel_buoyancy(data, body_id, t=None, waves=config.WaterParams.WAVES_DEFAULT, voxels=None,
+                   gravity=config.Physics.GRAVITY):
+    """지금 MuJoCo 상태(data)에서 몸체의 칸마다 부력과 작용점 (월드 좌표).
 
-    data    : MuJoCo MjData. 배의 현재 위치·기울기가 들어 있다
-    body_id : 배 body 번호. bind 때 Names.BOAT_BODY 로 한 번 찾아 둔 값
+    data    : MuJoCo MjData. 몸체의 현재 위치·기울기가 들어 있다
+    body_id : body 번호. bind 때 한 번 찾아 둔 값
     t       : 시각 [s] (파도 계산용). 안 주면 data.time (시뮬레이션 현재 시각)
-    voxels  : make_voxels() 결과. 배 모양은 안 변하니 bind 때 한 번 만들어 넘기면 됨
+    voxels  : (칸 중심(몸체 좌표), 칸 크기, 칸 부피). 안 주면 선체 make_voxels().
+              배 모양은 안 변하니 bind 때 한 번 만들어 넘기면 됨
+    gravity : 중력 크기 [m/s²]. Water 는 MuJoCo model.opt.gravity 크기를 넘긴다
 
     돌려주는 값
       forces_w : (칸 수, 3) 칸마다 부력. 위쪽(+z)만 있음
@@ -166,7 +169,7 @@ def voxel_buoyancy(data, body_id, t=None, waves=config.WaterParams.WAVES_DEFAULT
     #    부력은 원래 "세상 기준 위쪽"이라 월드 좌표에서 바로 만든다 (변환 필요 없음)
     volume = fraction * cell_volume
     forces_w = np.zeros_like(centers_w)
-    forces_w[:, 2] = config.Physics.RHO_WATER * config.Physics.GRAVITY * volume
+    forces_w[:, 2] = config.Physics.RHO_WATER * gravity * volume
 
     # 6) 작용점: 칸 중심 대신 "잠긴 부분의 가운데" 높이 (반쯤 잠긴 칸은 아래쪽에 걸림)
     #    → 기울었을 때 되돌리는 힘(토크)이 더 정확해진다
@@ -188,7 +191,7 @@ def voxel_buoyancy(data, body_id, t=None, waves=config.WaterParams.WAVES_DEFAULT
 #   회전 축 순서: (roll 좌우 기울기, pitch 앞뒤 기울기, yaw 방향 돌기)
 
 
-def heave_damping(mass):
+def heave_damping(mass, length=config.Hull.LENGTH, beam=config.Hull.BEAM, gravity=config.Physics.GRAVITY):
     """위아래 출렁임을 멈추게 하는 선형 계수 c [N·s/m] (감쇠비 HEAVE_DAMPING_RATIO 에서 계산).
 
     배를 살짝 눌렀다 놓으면 용수철처럼 위아래로 출렁인다.
@@ -196,46 +199,70 @@ def heave_damping(mass):
       무게       m = 배 무게
     감쇠비 ζ 로 "얼마나 빨리 멎을지"를 정하면 필요한 계수는 c = 2 · ζ · √(m · k).
     → 배 무게·크기가 바뀌어도 출렁임이 멎는 빠르기는 그대로 유지된다.
+    Water 는 MuJoCo 모델의 선체 크기·중력을 넘긴다.
     """
-    k = config.Physics.RHO_WATER * config.Physics.GRAVITY * config.Hull.LENGTH * config.Hull.BEAM
+    k = config.Physics.RHO_WATER * gravity * length * beam
     return 2.0 * config.WaterParams.HEAVE_DAMPING_RATIO * math.sqrt(mass * k)
 
 
-def drag_coefficients(mass, inertia):
-    """저항 계산에 쓰는 계수들을 한 번에 준비한다. 배 무게·모양은 안 변하니 bind 때 한 번만 부르면 됨.
+def drag_coefficients(linear, angular, cd, angular_quad, dimensions):
+    """완전히 잠겼을 때 기준 저항 계수. 몸 모양은 안 변하니 bind 때 한 번만 부르면 됨.
 
-    mass    = 배 무게 [kg]                (MuJoCo model.body_subtreemass)
-    inertia = (roll, pitch, yaw) 관성 [kg·m²] (MuJoCo model.body_inertia)
+    linear       : 이동 선형 계수 (surge, sway, heave)       [N·s/m]
+    angular      : 회전 선형 계수 (roll, pitch, yaw)         [N·m·s/rad]
+    cd           : 이동 항력 계수 Cd (surge, sway, heave)
+    angular_quad : 회전 2차 계수 (roll, pitch, yaw)          [N·m·s²/rad²]
+    dimensions   : 몸체 상자 크기 (길이, 폭, 높이) [m]
 
     돌려주는 dict (모두 길이 3 배열, 축 순서는 위 설명 참고)
       lin      : 이동 선형 계수 c        [N·s/m]       → F = −lin · v
-      quad     : 이동 2차 계수 ½·ρ·Cd·A  [N·s²/m²]     → F = −quad · |v| · v
+      quad     : 이동 2차 계수 ½·ρ·Cd·A  [N·s²/m²]     → F = −quad · |v| · v   (A = 완전히 잠긴 면적)
       rot_lin  : 회전 선형 계수          [N·m·s/rad]   → τ = −rot_lin · ω
       rot_quad : 회전 2차 계수           [N·m·s²/rad²] → τ = −rot_quad · |ω| · ω
+    잠긴 정도에 맞춘 값은 wetted_drag() 로 매 스텝 만든다.
     """
-    rho = config.Physics.RHO_WATER
-    L, B = config.Hull.LENGTH, config.Hull.BEAM
-    # 물에 잠긴 깊이: 가만히 떠 있을 때의 흘수를 쓴다 (출렁여도 단면적은 크게 안 변한다고 보는 단순화)
-    draft = mass / (rho * L * B)
-
-    # 각 방향에서 "물을 정면으로 미는 면적" A [m²]
-    #   앞뒤로 갈 때: 배 앞면 중 물에 잠긴 부분 = 폭 × 흘수
-    #   좌우로 갈 때: 배 옆면 중 물에 잠긴 부분 = 길이 × 흘수
-    #   위아래로 갈 때: 배 바닥 = 길이 × 폭
-    area = np.array([B * draft, L * draft, L * B])
-
-    # 선형 계수: 앞뒤·좌우는 config 숫자, 위아래는 감쇠비로 계산 (config 에서 None 으로 비워 둔 칸)
-    surge_lin, sway_lin, _ = config.WaterParams.DRAG_LINEAR
-    lin = np.array([surge_lin, sway_lin, heave_damping(mass)])
-
-    # 2차 계수: ½ · ρ · Cd · A  (공식에서 속도만 빼고 미리 곱해 둔 값)
-    quad = 0.5 * rho * np.array(config.WaterParams.DRAG_CD) * area
-
+    coeffs = np.asarray([linear, angular, cd, angular_quad], dtype=float)
+    if coeffs.shape != (4, 3) or not np.isfinite(coeffs).all() or np.any(coeffs < 0):
+        raise ValueError("물 저항 계수는 유한한 0 이상 값이어야 합니다.")
+    L, B, H = dimensions
+    # 각 방향에서 "물을 정면으로 미는 면적" A [m²]: 앞뒤 = 폭 × 높이, 좌우 = 길이 × 높이, 위아래 = 길이 × 폭
+    area = np.array([B * H, L * H, L * B])
     return {
-        "lin": lin,
-        "quad": quad,
-        "rot_lin": np.array(rot_drag_linear(mass, inertia)),  # roll·pitch 는 감쇠비로 계산, yaw 는 숫자
-        "rot_quad": np.array(config.WaterParams.ROT_DRAG_QUAD, dtype=float),
+        "lin": coeffs[0],
+        "quad": 0.5 * config.Physics.RHO_WATER * coeffs[2] * area,  # ½ · ρ · Cd · A (속도만 빼고 미리 곱함)
+        "rot_lin": coeffs[1],
+        "rot_quad": coeffs[3],
+    }
+
+
+def boat_drag_coefficients(mass, inertia, size=None, gravity=config.Physics.GRAVITY):
+    """선체 기준 저항 계수 (drag_coefficients 에 선체 값을 채운 것).
+
+    선형 계수: 앞뒤·좌우는 config 숫자, 위아래는 감쇠비로 계산 (config 에서 None 으로 비워 둔 칸).
+    회전 선형: roll·pitch 는 감쇠비로 계산, yaw 는 config 숫자 (rot_drag_linear).
+    size 를 안 주면 config.Hull (길이, 폭, 높이).
+    """
+    if size is None:
+        size = (config.Hull.LENGTH, config.Hull.BEAM, config.Hull.HEIGHT)
+    surge_lin, sway_lin, _ = config.WaterParams.DRAG_LINEAR
+    linear = (surge_lin, sway_lin, heave_damping(mass, size[0], size[1], gravity))
+    return drag_coefficients(linear, rot_drag_linear(mass, inertia), config.WaterParams.DRAG_CD,
+                             config.WaterParams.ROT_DRAG_QUAD, size)
+
+
+def wetted_drag(coeffs, wet_ratio, damping_scale):
+    """잠긴 정도에 맞춰 저항 계수를 줄인다. 물 밖으로 나오면 저항이 사라진다.
+
+    wet_ratio     : 잠긴 부피 ÷ 전체 부피 (0 ~ 1). 2차 항의 면적을 이만큼 줄인다
+                    (똑바로 떠 있으면 높이 × wet_ratio = 흘수 → 앞면 넓이 = 폭 × 흘수)
+    damping_scale : min(1, 잠긴 부피 × ρ ÷ 질량). 평형 잠김량 이상이면 1 → 감쇠비 계약값 그대로.
+                    선형 항과 회전 항 전체에 곱한다
+    """
+    return {
+        "lin": coeffs["lin"] * damping_scale,
+        "quad": coeffs["quad"] * wet_ratio,
+        "rot_lin": coeffs["rot_lin"] * damping_scale,
+        "rot_quad": coeffs["rot_quad"] * damping_scale,
     }
 
 
@@ -360,16 +387,12 @@ class Water:
             # 선체 상자를 VOXEL_RES 칸으로 자른다 (make_voxels: 중심, 칸 크기, 칸 부피)
             self.body_id = body_id
             self.voxels = make_voxels(size=size)
-            points = self.voxels[0] + model.geom_pos[geom_id]
+            centers_b, cell_size, cell_volume = self.voxels
+            voxels = (centers_b + model.geom_pos[geom_id], cell_size, cell_volume)
             mass = model.body_subtreemass[body_id]
-            linear = np.array([*config.WaterParams.DRAG_LINEAR[:2],
-                               2 * config.WaterParams.HEAVE_DAMPING_RATIO * np.sqrt(
-                                   mass * config.Physics.RHO_WATER * np.linalg.norm(model.opt.gravity)
-                                   * size[0] * size[1])])
-            self.targets.append(self._target(body_id, points, self.voxels[1] / 2, size, linear,
-                                            rot_drag_linear(mass, model.body_inertia[body_id]),
-                                            config.WaterParams.DRAG_CD,
-                                            config.WaterParams.ROT_DRAG_QUAD))
+            coeffs = boat_drag_coefficients(mass, model.body_inertia[body_id], size,
+                                            float(np.linalg.norm(model.opt.gravity)))
+            self.targets.append(dict(body_id=body_id, voxels=voxels, coeffs=coeffs))
             seen.add(body_id)
         for name in self.floating_bodies:
             extra_id = model.body(name).id
@@ -384,68 +407,43 @@ class Water:
                         raise ValueError("부력 대상은 서로 독립된 몸체여야 합니다.")
             seen.add(extra_id)
             points, half, dimensions = body_voxels(model, extra_id, config.RescueWater.VOXEL_SIZE)
-            self.targets.append(self._target(extra_id, points, half, dimensions,
-                                            config.RescueWater.DRAG_LINEAR,
-                                            config.RescueWater.ROT_DRAG_LINEAR,
-                                            config.RescueWater.DRAG_CD,
-                                            config.RescueWater.ROT_DRAG_QUAD))
-
-    @staticmethod
-    def _target(body_id, points, half, dimensions, linear, angular, cd, angular_quad):
-        coefficients = np.asarray([linear, angular, cd, angular_quad], dtype=float)
-        if coefficients.shape != (4, 3) or not np.isfinite(coefficients).all() or np.any(coefficients < 0):
-            raise ValueError("물 저항 계수는 유한한 0 이상 값이어야 합니다.")
-        return dict(body_id=body_id, points=points, half=half,
-                    cell_volume=float(np.prod(half * 2)), dimensions=dimensions,
-                    linear=coefficients[0], angular=coefficients[1],
-                    cd=coefficients[2], angular_quad=coefficients[3])
+            voxels = (points, 2 * half, float(np.prod(2 * half)))
+            coeffs = drag_coefficients(config.RescueWater.DRAG_LINEAR, config.RescueWater.ROT_DRAG_LINEAR,
+                                       config.RescueWater.DRAG_CD, config.RescueWater.ROT_DRAG_QUAD,
+                                       dimensions)
+            self.targets.append(dict(body_id=extra_id, voxels=voxels, coeffs=coeffs))
 
     def add_forces(self, model, data, acc):
         """부력은 잠긴 복셀 중심에, 저항은 현재 물 상대 속도에 적용한다.
 
-        회전된 복셀의 수직 투영 높이로 부분 침수를 근사한다.
+        계산은 모듈 함수(voxel_buoyancy, wetted_drag, water_drag)로 한다 → 단위 테스트가 실제 경로를 검증.
         파도는 수면 높이만 바꾸며 물 입자의 파도 속도는 아직 계산하지 않는다.
         """
-        from sim.frames import body_to_world, world_to_body, point_body_to_world, body_velocity_w
-
-        gravity = float(np.linalg.norm(model.opt.gravity))
         if model.opt.gravity[0] != 0 or model.opt.gravity[1] != 0 or model.opt.gravity[2] > 0:
             raise ValueError("물 모듈은 월드 -z 방향 중력만 지원합니다.")
-        rho = config.Physics.RHO_WATER
+        gravity = float(np.linalg.norm(model.opt.gravity))
         current = np.asarray(config.WaterParams.WATER_VELOCITY_W, dtype=float)
         if current.shape != (3,) or not np.isfinite(current).all():
             raise ValueError("물 속도는 유한한 월드 벡터여야 합니다.")
         self.submerged_volume = 0.0
         for target in self.targets:
             body_id = target['body_id']
-            points_w = point_body_to_world(data, body_id, target['points'])
-            rotation = data.xmat[body_id].reshape(3, 3)
-            height = 2 * (np.abs(rotation[2]) @ target['half'])
-            surface = self.wave_height(points_w[:, 0], points_w[:, 1], data.time)
-            wet = np.clip(.5 + (surface - points_w[:, 2]) / height, 0, 1)
-            total_wet = float(wet.sum())
-            if total_wet == 0:
+            forces_w, points_w, volume = voxel_buoyancy(data, body_id, waves=self.waves,
+                                                        voxels=target['voxels'], gravity=gravity)
+            if volume == 0:
                 continue
-            volume = total_wet * target['cell_volume']
             if body_id == self.body_id:
                 self.submerged_volume = volume  # 뷰어·디버깅용 (배의 잠긴 부피)
-            # 부분 침수 복셀의 잠긴 부분 중심. 직립 box에서는 정확한 부력 중심이다.
-            centers_w = points_w.copy()
-            centers_w[:, 2] += (wet - 1) * height / 2
-            center_w = np.sum(centers_w * wet[:, None], axis=0) / total_wet
-            acc.add(body_id, [0, 0, rho * gravity * volume], point_w=center_w)
-            velocity_w, omega_w = body_velocity_w(model, data, body_id)
-            velocity_b = world_to_body(data, body_id, velocity_w - current)
-            omega_b = world_to_body(data, body_id, omega_w)
-            wet_ratio = total_wet / len(wet)
+            # 칸별 부력을 합력 하나로: 크기 = 합, 작용점 = 부력 가중 평균 (토크가 같음)
+            #   중력 0 이면 부력도 0 → 작용점을 구할 수 없으니 건너뛰고 저항만 건다
+            lift = forces_w[:, 2]
+            if lift.sum() > 0:
+                center_w = (points_w * lift[:, None]).sum(axis=0) / lift.sum()
+                acc.add(body_id, [0.0, 0.0, lift.sum()], point_w=center_w)
+
             # 평형 잠김량에서는 감쇠비 계약값이 그대로 적용되고, 물 밖에서는 사라진다.
-            damping_scale = min(1., volume * rho / model.body_subtreemass[body_id])
-            dimensions = target['dimensions']
-            areas = np.array([dimensions[1] * dimensions[2], dimensions[0] * dimensions[2],
-                              dimensions[0] * dimensions[1]]) * wet_ratio
-            drag_b = (-target['linear'] * damping_scale * velocity_b
-                      - .5 * rho * target['cd'] * areas * np.abs(velocity_b) * velocity_b)
-            torque_b = (-target['angular'] * omega_b
-                        - target['angular_quad'] * np.abs(omega_b) * omega_b) * damping_scale
-            acc.add(body_id, body_to_world(data, body_id, drag_b),
-                    torque_w=body_to_world(data, body_id, torque_b))
+            wet_ratio = volume / (len(points_w) * target['voxels'][2])
+            damping_scale = min(1.0, volume * config.Physics.RHO_WATER / model.body_subtreemass[body_id])
+            coeffs = wetted_drag(target['coeffs'], wet_ratio, damping_scale)
+            force_w, torque_w = water_drag(model, data, body_id, coeffs)
+            acc.add(body_id, force_w, torque_w=torque_w)
