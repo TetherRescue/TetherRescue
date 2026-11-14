@@ -322,6 +322,37 @@ def water_drag(model, data, body_id, coeffs):
 
 
 # ─────────────────────────────────────────────────────────────
+# 부가질량: 배가 속도를 바꾸면 주변 물도 같이 밀려서 배가 더 무겁게 움직인다
+# ─────────────────────────────────────────────────────────────
+# 기본값은 꺼져 있다 (config.WaterParams.ADDED_MASS_ENABLED 주석 참고).
+# 이번 구현 범위: surge·sway 만. heave·yaw, 축끼리 섞이는 결합항(Munk 모멘트 등)은 아직 없음.
+def added_mass(mass):
+    """축별 부가질량 [kg] = (surge, sway, heave). heave 는 미지원이라 0.
+
+    mass = 배 무게 [kg] (MuJoCo model.body_subtreemass)
+    """
+    surge, sway, heave = config.WaterParams.ADDED_MASS_COEF
+    if heave is not None:
+        raise ValueError("heave 부가질량은 아직 지원하지 않습니다. ADDED_MASS_COEF 의 heave 는 None 으로 두세요.")
+    for name, coef in (("surge", surge), ("sway", sway)):
+        # 직전 스텝 가속도로 힘을 거는 방식이라 계수 ≥ 1 이면 계산이 발산할 수 있다
+        if not 0.0 <= coef < 1.0:
+            raise ValueError(f"{name} 부가질량 계수는 0 이상 1 미만이어야 합니다 (지금 {coef}).")
+    return np.array([surge * mass, sway * mass, 0.0])
+
+
+def added_mass_force_w(data, body_id, accel_w, added_mass_b):
+    """가속도 반대 방향의 부가질량 힘 (월드 좌표). F_b = −m_a · a_b (몸체 축마다 따로).
+
+    accel_w      : 물에 대한 배 무게중심의 가속도 (월드 좌표) [m/s²]
+    added_mass_b : added_mass() 결과 [kg]
+    축마다 부가질량이 다르므로(옆이 앞보다 큼) 몸체 좌표로 돌려 계산하고 다시 월드로 되돌린다.
+    """
+    accel_b = frames.world_to_body(data, body_id, np.asarray(accel_w, dtype=float))
+    return frames.body_to_world(data, body_id, -np.asarray(added_mass_b) * accel_b)
+
+
+# ─────────────────────────────────────────────────────────────
 # 물 모듈 본체
 # ─────────────────────────────────────────────────────────────
 class Water:
@@ -356,9 +387,10 @@ class Water:
         from sim.buoyancy import body_voxels
         import mujoco
 
-        if config.WaterParams.ADDED_MASS_ENABLED is not False:
-            raise ValueError("부가질량은 아직 지원하지 않습니다.")
         self.targets = []
+        # 부가질량 (선체만). 꺼져 있으면 None. 켜져 있으면 bind 때 축별 부가질량을 한 번 계산
+        self.added_mass_b = None
+        self._prev_vel = None   # (시각, 월드 속도): 가속도 = 속도 차이 ÷ 시간 간격 을 구하려고 기억
         seen = set()
         # 로봇 담당 PR 머지 전에도 쓰던 값: 미현 테스트·뷰어가 읽는 배 번호·복셀·잠긴 부피
         self.body_id = None
@@ -394,6 +426,8 @@ class Water:
                                             float(np.linalg.norm(model.opt.gravity)))
             self.targets.append(dict(body_id=body_id, voxels=voxels, coeffs=coeffs))
             seen.add(body_id)
+            if config.WaterParams.ADDED_MASS_ENABLED:
+                self.added_mass_b = added_mass(mass)   # heave 값이 있거나 계수 ≥ 1 이면 여기서 에러
         for name in self.floating_bodies:
             extra_id = model.body(name).id
             if extra_id in seen or extra_id == 0:
@@ -416,9 +450,11 @@ class Water:
     def add_forces(self, model, data, acc):
         """부력은 잠긴 복셀 중심에, 저항은 현재 물 상대 속도에 적용한다.
 
-        계산은 모듈 함수(voxel_buoyancy, wetted_drag, water_drag)로 한다 → 단위 테스트가 실제 경로를 검증.
+        계산은 모듈 함수(voxel_buoyancy, wetted_drag, water_drag, added_mass_force_w)로 한다
+        → 단위 테스트가 실제 경로를 검증.
         파도는 수면 높이만 바꾸며 물 입자의 파도 속도는 아직 계산하지 않는다.
         """
+        accel_w = self._boat_accel_w(model, data)
         if model.opt.gravity[0] != 0 or model.opt.gravity[1] != 0 or model.opt.gravity[2] > 0:
             raise ValueError("물 모듈은 월드 -z 방향 중력만 지원합니다.")
         gravity = float(np.linalg.norm(model.opt.gravity))
@@ -447,3 +483,23 @@ class Water:
             coeffs = wetted_drag(target['coeffs'], wet_ratio, damping_scale)
             force_w, torque_w = water_drag(model, data, body_id, coeffs)
             acc.add(body_id, force_w, torque_w=torque_w)
+
+            # 부가질량도 감쇠처럼 물 밖으로 나오면 줄어든다 (같이 밀 물이 없으므로)
+            if body_id == self.body_id and accel_w is not None:
+                acc.add(body_id, damping_scale * added_mass_force_w(data, body_id, accel_w, self.added_mass_b))
+
+    def _boat_accel_w(self, model, data):
+        """배 무게중심의 가속도 (월드 좌표) = (지금 속도 − 직전 스텝 속도) ÷ 시간 간격.
+
+        부가질량이 꺼져 있으면 None.
+        직전 기록이 없거나(첫 스텝) 시간이 한 칸만큼 흐르지 않았으면(리셋 등) None
+        → 가짜로 큰 가속도가 생겨 배가 튕기는 것을 막는다.
+        해류는 일정하므로 물에 대한 가속도 = 배 가속도.
+        """
+        if self.added_mass_b is None:
+            return None
+        vel_w, _ = frames.body_velocity_w(model, data, self.body_id)
+        prev, self._prev_vel = self._prev_vel, (data.time, vel_w.copy())
+        if prev is None or not np.isclose(data.time - prev[0], model.opt.timestep):
+            return None
+        return (vel_w - prev[1]) / model.opt.timestep

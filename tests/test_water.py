@@ -462,3 +462,140 @@ def test_roll_release_settles():
     world, _, _ = _sim_world(roll_deg=15)
     _run(world, seconds=3.0)
     assert abs(_roll_deg(world)) < 0.5
+
+
+# ─────────────────────────────────────────────────────────────
+# 7. 부가질량 (surge·sway 만. heave·yaw·결합항은 아직 없음)
+# ─────────────────────────────────────────────────────────────
+# 속도가 바뀔 때만 생기는 힘: F_b = −m_a · a_b (m_a = 계수 × 배 질량, 축마다 따로).
+# 가속도는 직전 스텝과의 속도 차이로 구한다 (한 스텝 늦음 → 계수 < 1 이어야 안정).
+from sim import frames  # noqa: E402
+
+# 잔잔한 물 표류 기준: config.Expect.DRIFT_* 가 채연 님과 합의 전이라 None → 노션 초안 60 s / 0.1 m
+DRIFT_SECONDS = config.Expect.DRIFT_SECONDS if config.Expect.DRIFT_SECONDS is not None else 60.0
+DRIFT_MAX = config.Expect.DRIFT_MAX if config.Expect.DRIFT_MAX is not None else 0.1
+
+
+@pytest.fixture
+def added_mass_on(monkeypatch):
+    monkeypatch.setattr(WaterParams, "ADDED_MASS_ENABLED", True)
+
+
+@pytest.fixture
+def no_surge_sway_drag(monkeypatch):
+    # 손 계산을 깔끔하게: 앞뒤·좌우 저항을 0 으로 (위아래는 그대로 둬서 배가 떠 있게)
+    monkeypatch.setattr(WaterParams, "DRAG_LINEAR", (0.0, 0.0, None))
+    monkeypatch.setattr(WaterParams, "DRAG_CD", (0.0, 0.0, WaterParams.DRAG_CD[2]))
+
+
+def _push(world, force_b, seconds):
+    """배에 몸체 기준 일정한 힘 force_b [N] 을 무게중심에 걸고 seconds 초 진행.
+    돌려주는 값: 마지막 몸체 기준 속도 (앞뒤, 좌우, 위아래) [m/s]"""
+    water_part, robot = world.parts
+    bid = water_part.body_id
+    for _ in range(round(seconds / world.model.opt.timestep)):
+        world.acc.reset()
+        water_part.add_forces(world.model, world.data, world.acc)
+        robot.add_forces(world.model, world.data, world.acc)
+        world.acc.add(bid, frames.body_to_world(world.data, bid, force_b))
+        world.acc.apply(world.model, world.data)
+        mujoco.mj_step(world.model, world.data)
+    vel_w, _ = frames.body_velocity_w(world.model, world.data, bid)
+    return frames.world_to_body(world.data, bid, vel_w)
+
+
+# ── 계수 ──
+def test_added_mass_from_config():
+    # 배 질량 대비 비율 (떠 있는 배는 배 질량 = 밀어낸 물 질량). heave 는 이번 주 미지원 → 0
+    m_a = water.added_mass(MASS)
+    assert m_a[0] == pytest.approx(WaterParams.ADDED_MASS_COEF[0] * MASS)
+    assert m_a[1] == pytest.approx(WaterParams.ADDED_MASS_COEF[1] * MASS)
+    assert m_a[2] == 0.0
+
+
+def test_added_mass_coefficients_below_one():
+    # 직전 스텝 가속도를 쓰는 방식은 계수 ≥ 1 이면 발산할 수 있음 → 설정 단계에서 막는다
+    assert all(0.0 <= c < 1.0 for c in WaterParams.ADDED_MASS_COEF[:2])
+
+
+def test_heave_added_mass_rejected(monkeypatch, added_mass_on):
+    # heave 값을 넣으면 조용히 무시하지 말고 바로 멈춘다
+    monkeypatch.setattr(WaterParams, "ADDED_MASS_COEF", (*WaterParams.ADDED_MASS_COEF[:2], 1.0))
+    with pytest.raises(ValueError, match="heave"):
+        build_world(parts=(Water(waves=CALM), Robot()))
+
+
+# ── 방향 (노션 06 문제 2): 몸체 축 기준, 가속 반대 방향 ──
+def test_added_mass_opposes_accel_in_body_axes():
+    # 배를 90° 돌려 놓으면 몸체 앞(x) = 월드 +y, 몸체 왼쪽(y) = 월드 −x
+    _, data, bid = _moving_boat(yaw_deg=90)
+    m_a = water.added_mass(MASS)
+    surge = water.added_mass_force_w(data, bid, (0.0, 1.0, 0.0), m_a)   # 앞으로 1 m/s²
+    np.testing.assert_allclose(surge, (0.0, -m_a[0], 0.0), atol=1e-9)
+    sway = water.added_mass_force_w(data, bid, (-1.0, 0.0, 0.0), m_a)   # 왼쪽으로 1 m/s²
+    np.testing.assert_allclose(sway, (m_a[1], 0.0, 0.0), atol=1e-9)
+
+
+# ── 실제 시뮬레이션 ──
+@pytest.mark.parametrize("axis", [0, 1])
+@pytest.mark.parametrize("enabled", [True, False])
+def test_push_matches_hand(monkeypatch, no_surge_sway_drag, axis, enabled):
+    # 저항 없이 일정한 힘 F 를 t 초 → 속도 = F · t / (m + m_a)   (부가질량 끄면 m_a = 0)
+    monkeypatch.setattr(WaterParams, "ADDED_MASS_ENABLED", enabled)
+    world, water_part, _ = _sim_world()
+    mass = world.model.body_subtreemass[water_part.body_id]
+    m_a = water.added_mass(mass)[axis] if enabled else 0.0
+    force, seconds = 10.0, 0.5
+    force_b = np.zeros(3)
+    force_b[axis] = force
+    vel_b = _push(world, force_b, seconds)
+    assert vel_b[axis] == pytest.approx(force * seconds / (mass + m_a), rel=0.02)
+
+
+def test_terminal_speed_unchanged(monkeypatch):
+    # 부가질량은 속도가 바뀔 때만 작용 → 오래 밀어 일정 속도가 되면 켜든 끄든 같아야 함
+    final = {}
+    for enabled in (False, True):
+        monkeypatch.setattr(WaterParams, "ADDED_MASS_ENABLED", enabled)
+        world, _, _ = _sim_world()
+        vel_b = _push(world, (0.0, 20.0, 0.0), seconds=8.0)
+        assert np.all(np.isfinite(vel_b)), "계산이 폭발함 (NaN)"
+        final[enabled] = vel_b[1]
+    assert final[True] == pytest.approx(final[False], rel=0.01)
+
+
+def _first_load(world, water_part):
+    """배에 속도를 준 직후, 물이 처음 거는 외력 (xfrc_applied 사본)."""
+    dof = world.model.body_dofadr[water_part.body_id]   # 배 freejoint 의 속도 시작 위치
+    world.data.qvel[dof:dof + 3] = (1.0, 0.5, 0.0)      # 월드 기준 이동 속도
+    mujoco.mj_forward(world.model, world.data)
+    world.acc.reset()
+    water_part.add_forces(world.model, world.data, world.acc)
+    world.acc.apply(world.model, world.data)
+    return world.data.xfrc_applied.copy()
+
+
+def test_no_kick_on_first_step_or_reset(monkeypatch):
+    # 직전 속도가 없을 때(첫 스텝, 리셋 직후)는 속도가 있어도 부가질량 힘 0
+    # → 같은 상태에서 부가질량을 끈 물과 외력이 똑같아야 함
+    loads = {}
+    for enabled in (True, False):
+        monkeypatch.setattr(WaterParams, "ADDED_MASS_ENABLED", enabled)
+        world, water_part, _ = _sim_world()
+        first = _first_load(world, water_part)
+        _push(world, (0.0, 20.0, 0.0), seconds=0.1)       # 몇 스텝 돌려 직전 속도를 남김
+        mujoco.mj_resetData(world.model, world.data)       # 시간이 0 으로 돌아감 = 리셋
+        mujoco.mj_forward(world.model, world.data)
+        loads[enabled] = (first, _first_load(world, water_part))
+    for on, off in zip(loads[True], loads[False]):
+        np.testing.assert_allclose(on, off, atol=1e-9)
+
+
+def test_calm_water_no_drift(added_mass_on):
+    # 노션 06 통합 테스트: 파도·추력 0 이면 오래 둬도 수평으로 거의 안 움직여야 함
+    world, water_part, _ = _sim_world()
+    bid = water_part.body_id
+    start = world.data.xipos[bid, :2].copy()
+    vel_b = _push(world, (0.0, 0.0, 0.0), seconds=DRIFT_SECONDS)
+    assert np.all(np.isfinite(vel_b)), "계산이 폭발함 (NaN)"
+    assert np.linalg.norm(world.data.xipos[bid, :2] - start) < DRIFT_MAX
