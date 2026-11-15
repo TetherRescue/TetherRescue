@@ -271,3 +271,47 @@ def test_explicit_trial_placement_and_tow_site_do_not_change_main_default():
     world = build_world(parts=[robot], gravity=0)
     np.testing.assert_allclose(world.data.xpos[robot.body_id], position)
     np.testing.assert_allclose(world.model.site_pos[robot.tow_site_id], point)
+
+
+def _righting_arm(axis, angle):
+    """잔잔한 물에서 배를 axis(0 = roll, 1 = pitch) 로 angle 만큼 기울여 고정하고 복원팔 GZ [m].
+
+    부력 = 무게가 되는 높이를 이분법으로 찾은 뒤, 복셀 부력이 무게중심 둘레에 거는 돌림힘 ÷ 무게.
+    + = 다시 세우는 쪽. 시뮬레이션 시간은 돌리지 않음 (자세만 정하고 물의 부력 함수를 부름).
+    """
+    from sim.water import Water, voxel_buoyancy
+
+    calm = config.WaterParams.WAVES_CALM   # voxel_buoyancy 기본값은 파도 있음 → 반드시 잔잔한 물로
+    world = build_world(parts=(Water(waves=calm), Robot()))
+    model, data = world.model, world.data
+    water, robot = world.parts
+    voxels, bid, adr = water.targets[0]['voxels'], robot.body_id, robot.qpos_adr
+    weight = model.body_mass[bid] * config.Physics.GRAVITY
+    quat = np.zeros(4)
+    mujoco.mju_axisAngle2Quat(quat, np.eye(3)[axis], angle)
+
+    def buoyancy(z):
+        data.qpos[adr:adr + 3] = (0.0, 0.0, z)
+        data.qpos[adr + 3:adr + 7] = quat
+        mujoco.mj_kinematics(model, data)
+        return voxel_buoyancy(data, bid, t=0.0, waves=calm, voxels=voxels, gravity=config.Physics.GRAVITY)
+
+    lo, hi = -1.0, 1.0   # 완전히 잠김 ~ 물 밖
+    for _ in range(50):
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if buoyancy(mid)[0][:, 2].sum() > weight else (lo, mid)
+    forces, points, _ = buoyancy((lo + hi) / 2)
+    moment = np.cross(points - data.xipos[bid], forces).sum(axis=0)
+    return -moment[axis] / weight
+
+
+@pytest.mark.parametrize('axis,limit', [(0, config.Capsize.ROLL_LIMIT), (1, config.Capsize.PITCH_LIMIT)])
+def test_capsize_limit_below_vanishing_stability(axis, limit):
+    """전복 기준각 전까지는 스스로 일어서고(GZ > 0), 조금 더 넘어가면 더 넘어가는 쪽(GZ < 0).
+
+    기준각이 복원력 소실각(roll 약 96°, pitch 약 92°) 바로 앞에 있다는 config.Capsize 근거를 확인한다.
+    선체·무게를 바꿔 이 테스트가 깨지면 기준각을 다시 재야 한다.
+    """
+    for angle in np.radians([10, 30, 60]).tolist() + [limit]:
+        assert _righting_arm(axis, angle) > 0, f"{np.degrees(angle):.0f}° 에서 이미 복원력 없음"
+    assert _righting_arm(axis, limit + np.radians(15)) < 0, "기준각 + 15° 에서도 일어섬 → 기준각이 너무 이름"
