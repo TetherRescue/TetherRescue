@@ -599,3 +599,140 @@ def test_calm_water_no_drift(added_mass_on):
     vel_b = _push(world, (0.0, 0.0, 0.0), seconds=DRIFT_SECONDS)
     assert np.all(np.isfinite(vel_b)), "계산이 폭발함 (NaN)"
     assert np.linalg.norm(world.data.xipos[bid, :2] - start) < DRIFT_MAX
+
+
+# ─────────────────────────────────────────────────────────────
+# 8. 큰 각도 복원력: 복셀 부력이 "정답"을 잘 따라가는지 (재발 방지)
+# ─────────────────────────────────────────────────────────────
+# 왜 필요한가
+#   동경 님 전복 기준각(config.Capsize, 90°)은 이 복셀 부력으로 잰 복원팔 GZ 에서 나왔다.
+#   부력 코드나 VOXEL_RES 가 바뀌어 큰 각도 계산이 틀어지면, 전복 기준각 근거도 조용히 무너진다.
+#   → 정답과 비교하는 테스트를 두어, 틀어지면 바로 실패하게 한다.
+#
+# "정답"은 어떻게 구하나
+#   선체는 상자라서, 기울인 단면(직사각형)을 수면 아래만 잘라 내면 잠긴 넓이·중심을 정확히 계산할 수 있다.
+#   roll 이면 폭×높이 단면, pitch 면 길이×높이 단면. 단면이 길이 방향으로 같으니 넓이 × 길이 = 잠긴 부피.
+#
+# GZ (복원팔) 란
+#   배를 기울였을 때 부력 중심이 무게중심에서 옆으로 떨어진 거리 [m].
+#   양수 = 다시 일어섬, 음수 = 더 넘어감. GZ 가 0 이 되는 각도 = 복원력 소실각 (넘으면 못 돌아옴).
+#   두 방법 모두 "부력 = 배 무게" 가 되는 높이에 띄운 뒤 GZ 를 잰다.
+#
+# 2026-11-16 측정 (VOXEL_RES 8×4×4)
+#   roll : 10~80° 에서 복셀이 정답보다 5~10% 작음 (폭 방향 4칸이라 거칠어서). 소실각 정답 96.0° / 복셀 97.1°
+#   pitch: 오차 4% 이내. 소실각 정답·복셀 모두 92.3°
+#   칸을 늘리면(16×8×8, 32×16×16) 오차가 줄어 정답에 붙는다 → 오차 원인은 칸의 거칠기.
+LARGE_ANGLE_GZ_TOL = 0.15        # GZ 허용 오차 (측정 최대 약 10% + 여유)
+VANISHING_ANGLE_TOL_DEG = 2.0    # 소실각 허용 오차 [°] (측정 1.1° + 여유)
+
+
+def _clip_below_surface(poly):
+    """다각형 [(가로, 높이), ...] 에서 수면(높이 0) 아래 부분만 남긴다.
+    꼭짓점을 차례로 보며, 물속 점은 남기고 수면을 가로지르는 변은 수면과 만나는 점을 넣는다."""
+    out = []
+    for i, p in enumerate(poly):
+        q = poly[(i + 1) % len(poly)]
+        if p[1] <= 0:
+            out.append(p)
+        if (p[1] <= 0) != (q[1] <= 0):
+            t = p[1] / (p[1] - q[1])
+            out.append((p[0] + t * (q[0] - p[0]), 0.0))
+    return out
+
+
+def _area_and_center(poly):
+    """다각형 넓이와 중심의 가로 위치 (신발끈 공식)."""
+    area = center = 0.0
+    for i, p in enumerate(poly):
+        q = poly[(i + 1) % len(poly)]
+        cross = p[0] * q[1] - q[0] * p[1]
+        area += cross
+        center += (p[0] + q[0]) * cross
+    return abs(area) / 2, (center / (3 * area) if area else 0.0)
+
+
+def _exact_gz(deg, axis):
+    """상자 단면으로 계산한 정답 GZ [m]. axis 0 = roll, 1 = pitch.
+
+    단면 좌표 = (가로, 높이). roll 의 가로 = 몸체 y, pitch 의 가로 = 몸체 x.
+    pitch 는 +각도일 때 앞(+x)이 내려가므로, 같은 식을 쓰려고 단면을 반대로 돌린다.
+    """
+    width, length = (config.Hull.BEAM, config.Hull.LENGTH) if axis == 0 else (config.Hull.LENGTH, config.Hull.BEAM)
+    height = config.Hull.HEIGHT
+    com_side, com_up = config.Hull.COM[1 - axis], config.Hull.COM[2]   # roll → y, pitch → x
+    angle = math.radians(deg) * (1 if axis == 0 else -1)
+    c, s = math.cos(angle), math.sin(angle)
+
+    def turn(side, up):
+        return side * c - up * s, side * s + up * c
+
+    corners = [turn(w * width / 2, h * height / 2) for w, h in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+    volume_needed = config.Hull.MASS / config.Physics.RHO_WATER   # 떠 있으려면 이만큼 잠겨야 함
+
+    lo, hi = -1.0, 1.0   # 상자 중심 높이 탐색 범위. 높을수록 덜 잠김
+    for _ in range(60):  # 반씩 줄이며 "잠긴 부피 = 필요한 부피" 인 높이 찾기
+        mid = (lo + hi) / 2
+        area, _ = _area_and_center(_clip_below_surface([(x, z + mid) for x, z in corners]))
+        lo, hi = (mid, hi) if area * length > volume_needed else (lo, mid)
+    _, buoyancy_side = _area_and_center(_clip_below_surface([(x, z + (lo + hi) / 2) for x, z in corners]))
+    weight_side, _ = turn(com_side, com_up)
+    gz = buoyancy_side - weight_side
+    return -gz if axis == 0 else gz   # 축마다 "일어서는 쪽" 부호를 양수로 맞춤
+
+
+@pytest.fixture(scope="module")
+def tilt_boat():
+    """선체 상자 하나짜리 모델 (4번 섹션 _boat). 각도만 바꿔 가며 재사용."""
+    return _boat()
+
+
+def _voxel_gz(tilt_boat, deg, axis):
+    """복셀 부력(water.voxel_buoyancy)으로 잰 GZ [m]. 정답과 같은 방식으로 띄운 뒤 잰다."""
+    model, data, bid = tilt_boat
+    half = math.radians(deg) / 2
+    quat = [math.cos(half), 0.0, 0.0, 0.0]
+    quat[1 + axis] = math.sin(half)   # roll = x 축, pitch = y 축 둘레 회전
+    weight = model.body_subtreemass[bid] * config.Physics.GRAVITY
+
+    def buoyancy_at(z):
+        data.qpos[0:3] = (0.0, 0.0, z)
+        data.qpos[3:7] = quat
+        mujoco.mj_forward(model, data)
+        return water.voxel_buoyancy(data, bid, waves=CALM)
+
+    lo, hi = -1.0, 1.0
+    for _ in range(60):  # 반씩 줄이며 "부력 = 무게" 인 높이 찾기
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if buoyancy_at(mid)[0][:, 2].sum() > weight else (lo, mid)
+    forces, points, _ = buoyancy_at((lo + hi) / 2)
+    torque = np.cross(points - data.xipos[bid], forces).sum(axis=0)   # 무게중심 기준 회전력
+    return -torque[axis] / weight   # GZ = 회전력 ÷ 무게, 일어서는 쪽을 양수로
+
+
+def _vanishing_angle(gz_of, start=80.0, stop=110.0, step=0.5):
+    """GZ 가 양수 → 음수로 바뀌는 각도 [°] (사이는 직선으로 보간)."""
+    angles = np.arange(start, stop + step / 2, step)
+    values = [gz_of(a) for a in angles]
+    for a0, a1, g0, g1 in zip(angles, angles[1:], values, values[1:]):
+        if g0 > 0 >= g1:
+            return a0 + (a1 - a0) * g0 / (g0 - g1)
+    pytest.fail(f"{start}~{stop}° 안에서 GZ 가 0 이 되지 않음")
+
+
+@pytest.mark.parametrize("axis", [0, 1], ids=["roll", "pitch"])
+@pytest.mark.parametrize("deg", [10, 30, 50, 70, 80])
+def test_large_angle_gz_matches_exact(tilt_boat, axis, deg):
+    # 큰 각도에서도 복셀 GZ 가 정답과 ±15% 안
+    assert _voxel_gz(tilt_boat, deg, axis) == pytest.approx(_exact_gz(deg, axis), rel=LARGE_ANGLE_GZ_TOL)
+
+
+@pytest.mark.parametrize("axis", [0, 1], ids=["roll", "pitch"])
+def test_vanishing_angle_matches_exact(tilt_boat, axis):
+    # 복원력 소실각이 정답과 ±2° 안, 그리고 전복 기준각(config.Capsize)보다 뒤에 있어야
+    # "기준각 전까지는 스스로 일어선다" 는 근거가 성립한다.
+    exact = _vanishing_angle(lambda a: _exact_gz(a, axis))
+    voxel = _vanishing_angle(lambda a: _voxel_gz(tilt_boat, a, axis))
+    assert voxel == pytest.approx(exact, abs=VANISHING_ANGLE_TOL_DEG)
+    limit = (config.Capsize.ROLL_LIMIT, config.Capsize.PITCH_LIMIT)[axis]
+    if limit is not None:
+        assert math.radians(min(exact, voxel)) > limit
