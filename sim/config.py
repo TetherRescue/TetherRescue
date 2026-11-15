@@ -623,8 +623,14 @@ class Expect:
 class Capsize:
     # 무엇: 배가 이 각도 [rad] 이상 기울면 "전복"으로 판정. 롤 = 좌우, 피치 = 앞뒤.
     # 사용: 로봇(판정), 태수 PhaseManager(판정 후 처리)
-    ROLL_LIMIT = None
-    PITCH_LIMIT = None
+    # 이유: 잔잔한 물에서 기울기별 복원팔 GZ(= 복원 모멘트 ÷ 무게)를 잰 결과 (2026-11-15, 동경):
+    #       GZ 가 0 이 되는 각도(복원력 소실각) = roll 약 96~97°, pitch 약 92°.
+    #       그보다 조금 앞인 90° 로 둠 → 이 각도를 넘으면 스스로 못 돌아온다고 봄.
+    #       참고: 최대 GZ 는 roll 약 17 cm·pitch 약 48 cm (20~25°), 60° 에서도 roll GZ 약 12 cm 로 아직 강하게 일어섬.
+    #       선체는 물이 안 들어오는 상자라 실제 배보다 낙관적 (갑판이 잠기는 roll 약 53° 이후 침수 없음).
+    #       검증: tests/test_robot.py test_capsize_limit_below_vanishing_stability
+    ROLL_LIMIT = math.radians(90)    # [동경 / 제안]
+    PITCH_LIMIT = math.radians(90)   # [동경 / 제안]
     # 무엇: 전복 판정 후 무엇을 할지. 후보: 에피소드 종료 / 안전 모드 (태수와 합의)
     ON_CAPSIZE = None
 
