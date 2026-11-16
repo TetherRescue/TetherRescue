@@ -68,18 +68,33 @@ def test_actual_boat_settles_to_analytic_draft_without_drift():
 
 
 @pytest.mark.parametrize('axis', [0, 1])
-def test_heel_creates_restoring_torque_and_settles(axis):
+@pytest.mark.parametrize('degrees', [-8, 8])
+def test_heel_creates_restoring_torque_and_settles(axis, degrees):
     world, water, boat = boat_at(config.Hull.HEIGHT / 2 - config.Expect.DRAFT)
-    angle = np.deg2rad(8)
+    angle = np.deg2rad(degrees)
     quaternion = np.zeros(4)
     quaternion[0] = np.cos(angle / 2)
     quaternion[1 + axis] = np.sin(angle / 2)
     world.data.qpos[3:7] = quaternion
-    assert applied_loads(world, water)[boat.body_id, 3 + axis] < 0
-    for _ in range(2500):
+    torque = applied_loads(world, water)[boat.body_id, 3 + axis]
+    assert degrees * torque < 0
+    dt = world.model.opt.timestep
+    stable_since = None
+    for _ in range(round(5 / dt)):
         advance(world)
-    up = world.data.xmat[boat.body_id].reshape(3, 3)[:, 2]
-    assert np.arccos(np.clip(up[2], -1, 1)) < np.deg2rad(.3)
+        mujoco.mj_kinematics(world.model, world.data)
+        up_z = world.data.xmat[boat.body_id, 8]
+        tilt = np.rad2deg(np.arccos(np.clip(up_z, -1, 1)))
+        # 단일 자유 관절의 각속도 크기는 좌표계 회전에 불변이다.
+        speed = np.rad2deg(np.linalg.norm(world.data.qvel[3:6]))
+        assert np.isfinite([tilt, speed]).all()
+        if tilt > .3 or speed > 1:
+            stable_since = None
+        elif stable_since is None:
+            stable_since = world.data.time
+    assert stable_since is not None and world.data.time - stable_since >= .5
+    axis_name = ('roll', 'pitch')[axis]
+    print(f'{axis_name} {degrees:+d} deg: {torque:+.5f} N m, settled {stable_since:.3f} s')
     assert not world.data.warning.number.any()
 
 
