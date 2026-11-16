@@ -19,7 +19,7 @@ def test_default_ring_is_an_independent_free_body_with_separate_mass():
     assert model.nq == 14 and model.nv == 12
     assert model.body_parentid[ring.body_id] == 0
     assert model.body_mass[human.body_id] == pytest.approx(70)
-    assert model.body_mass[ring.body_id] == pytest.approx(2)
+    assert model.body_mass[ring.body_id] == pytest.approx(config.Lifebuoy.MASS)
     assert model.body_subtreemass[human.body_id] == pytest.approx(70)
     assert model.site_bodyid[ring.site_id] == ring.body_id
 

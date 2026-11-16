@@ -101,7 +101,12 @@ def test_actual_ring_pulls_human_and_runs_thousand_steps_without_reset():
     human_id = world.model.body(config.Names.HUMAN_BODY).id
     ring_id = world.model.body(config.Names.LIFEBUOY_BODY).id
     rope = world.parts[-1]
-    initial_center = (70 * world.data.xipos[human_id] + 2 * world.data.xipos[ring_id]) / 72
+    masses = world.model.body_mass[[human_id, ring_id]]
+
+    def center_of_mass():
+        return masses @ world.data.xipos[[human_id, ring_id]] / masses.sum()
+
+    initial_center = center_of_mass()
     for step in range(1000):
         mujoco.mj_forward(world.model, world.data)
         assert rope.tension(world.model, world.data) >= 0
@@ -114,7 +119,7 @@ def test_actual_ring_pulls_human_and_runs_thousand_steps_without_reset():
         assert np.isfinite(world.data.qvel).all()
         if step == 99:
             mujoco.mj_forward(world.model, world.data)
-            center = (70 * world.data.xipos[human_id] + 2 * world.data.xipos[ring_id]) / 72
+            center = center_of_mass()
             assert center[0] > initial_center[0]  # 고정점(+x) 쪽으로 사람도 이동
     assert world.data.time == pytest.approx(2.0)  # 데모 리셋 없이 연속 실행
     assert not world.data.warning.number.any()

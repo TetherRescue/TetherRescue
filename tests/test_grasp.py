@@ -38,7 +38,7 @@ def test_initially_independent_not_worn_and_rope_already_connected():
     assert model.body_parentid[demo.ring.body_id] == 0
     assert model.body_parentid[demo.human.body_id] == 0
     assert model.body_mass[demo.human.body_id] == pytest.approx(70)
-    assert model.body_mass[demo.ring.body_id] == pytest.approx(2)
+    assert model.body_mass[demo.ring.body_id] == pytest.approx(config.Lifebuoy.MASS)
     assert model.nv == 18  # 시험 질점·사람·구명환 각각 자유 관절
     assert not demo.grasp.is_held(data)
     assert demo.rope.attached
@@ -60,7 +60,8 @@ def test_rope_pulls_only_ring_before_receipt():
     np.testing.assert_allclose(world.data.qacc[dof:dof + 6], 0, atol=1e-10)
     ring_joint = world.model.joint(config.Names.LIFEBUOY_FREE).id
     ring_dof = world.model.jnt_dofadr[ring_joint]
-    assert world.data.qacc[ring_dof] == pytest.approx(50.)
+    # 1m 늘어난 줄의 장력 k×1m가 구명환 질량만 가속한다.
+    assert world.data.qacc[ring_dof] == pytest.approx(config.Tether.STIFFNESS * 1.0 / config.Lifebuoy.MASS)
     assert demo.rope.tension(world.model, world.data) == pytest.approx(100.)
 
 
