@@ -315,3 +315,77 @@ def test_capsize_limit_below_vanishing_stability(axis, limit):
     for angle in np.radians([10, 30, 60]).tolist() + [limit]:
         assert _righting_arm(axis, angle) > 0, f"{np.degrees(angle):.0f}° 에서 이미 복원력 없음"
     assert _righting_arm(axis, limit + np.radians(15)) < 0, "기준각 + 15° 에서도 일어섬 → 기준각이 너무 이름"
+
+
+# ── 구명환 윈치 (짧게 끌고 가다가 줄을 풀어 건네줌) ─────────────────
+
+def _winch_world():
+    """물·중력 없이 배 + 독립 구명환 + 처음부터 연결된 로프. 환은 선미 뒤 0.5 m."""
+    from sim.lifebuoy import Lifebuoy
+    from sim.tether import Tether
+    robot = Robot(winch=True)
+    stern = np.asarray(Hull.TOW_POINT_B)
+    ring = Lifebuoy(attached=False, position=stern - (0.5 + config.Lifebuoy.TOW_POINT_B[0], config.Lifebuoy.TOW_POINT_B[1], 0))
+    rope = Tether(enabled=True, attached=True)
+    world = build_world(parts=[robot, ring, rope], gravity=0)
+    return world, robot, ring, rope
+
+
+def test_winch_starts_stowed_short():
+    world, robot, _, rope = _winch_world()
+    assert robot.delivery_state == 'STOWED' and not robot.delivery_ready
+    assert robot.rope_length(world.model) == pytest.approx(config.Winch.STOW_LENGTH)
+    assert world.model.tendon_lengthspring[rope.tendon_id, 1] == pytest.approx(config.Winch.STOW_LENGTH)
+
+
+def test_pay_out_lengthens_at_speed_then_signals_ready():
+    world, robot, _, _ = _winch_world()
+    model = world.model
+    assert robot.pay_out() is True
+    assert robot.pay_out() is False   # 두 번 시작하지 않음
+    for _ in range(round(1.0 / model.opt.timestep)):
+        advance(world)
+        assert not robot.delivery_ready or robot.rope_length(model) == pytest.approx(config.Winch.PAYOUT_LENGTH)
+    expected = config.Winch.STOW_LENGTH + config.Winch.PAYOUT_SPEED * 1.0
+    assert robot.rope_length(model) == pytest.approx(expected, abs=2 * config.Winch.PAYOUT_SPEED * model.opt.timestep)
+    seconds = (config.Winch.PAYOUT_LENGTH - config.Winch.STOW_LENGTH) / config.Winch.PAYOUT_SPEED
+    for _ in range(round(seconds / model.opt.timestep)):
+        advance(world)
+    assert robot.delivery_state == 'PAID_OUT' and robot.delivery_ready
+    assert robot.rope_length(model) == pytest.approx(config.Winch.PAYOUT_LENGTH)
+
+
+def test_short_rope_pulls_ring_and_payout_releases_tension():
+    """감긴 상태에서 배가 앞으로 가면 환이 끌려오고, 줄을 다 풀면 같은 간격에서 장력이 없다."""
+    world, robot, ring, rope = _winch_world()
+    model, data = world.model, world.data
+    robot.set_command(1.0)
+    for _ in range(round(1.5 / model.opt.timestep)):
+        advance(world)
+    assert rope.tension(model, data) > 0
+    assert data.qvel[model.jnt_dofadr[model.body_jntadr[ring.body_id]]] > 0.05   # 환이 +x 로 끌려옴
+    robot.set_command(0.0)
+    data.qvel[:] = 0
+    robot.pay_out()
+    for _ in range(round(5.0 / model.opt.timestep)):
+        advance(world)
+    assert robot.delivery_ready
+    mujoco.mj_forward(model, data)
+    assert rope.tension(model, data) == 0.0   # 간격(약 1 m) < 푼 길이 3 m
+
+
+def test_reset_winch_restores_stowed_length():
+    world, robot, _, _ = _winch_world()
+    robot.pay_out()
+    for _ in range(round(5.0 / world.model.opt.timestep)):
+        advance(world)
+    robot.reset_winch(world.model)
+    assert robot.delivery_state == 'STOWED'
+    assert robot.rope_length(world.model) == pytest.approx(config.Winch.STOW_LENGTH)
+
+
+def test_winch_requires_rope_and_flag():
+    with pytest.raises(ValueError):
+        Robot().pay_out()
+    with pytest.raises(AssertionError):   # 로프(tendon) 없이 winch=True 면 bind 에서 멈춤
+        build_world(parts=[Robot(winch=True)], gravity=0)

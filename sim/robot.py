@@ -1,22 +1,31 @@
-"""2 로봇: 선체·추진기·조향·전복 판정 (담당: 동경)."""
+"""2 로봇: 선체·추진기·조향·전복 판정·구명환 윈치 (담당: 동경)."""
 import mujoco
 import numpy as np
 
 from sim import config, frames
-from sim.config import Hull, Names, Sensors, Thruster
+from sim.config import Hull, Names, Sensors, Thruster, Winch
 
 SITE_SIZE = (0.03,)   # 점(site) 표시 크기 [m]. 그림용이라 물리에 영향 없음
+
+# 윈치 상태: 감음(짧게 끌고 감) → 푸는 중 → 다 풀림(= 건네줌). delivery_ready 는 PAID_OUT 일 때만 True
+STOWED, PAYING_OUT, PAID_OUT = 'STOWED', 'PAYING_OUT', 'PAID_OUT'
 
 
 class Robot:
     REQUIRES = {}  # 예: {"max_dt": 0.004}
 
-    def __init__(self, surface_height=None, *, position=None, tow_point_b=None):
+    def __init__(self, surface_height=None, *, position=None, tow_point_b=None, winch=False):
         """surface_height: 수면 높이 함수 (x, y, t) -> z, 예: Water().wave_height. x, y 는 배열로 받음.
 
         None 이면 1주차 가정 "노즐은 항상 물속" (WaterAPI.USE_IN_WEEK1 = False).
         주면 노즐이 수면 위로 나온 스텝에는 그 노즐 추력을 0 으로 한다 (Thruster.FULL_THRUST_DEPTH 주석).
+        winch: True 면 선미 로프(Names.TETHER_TENDON)의 길이를 배가 조절한다.
+          처음엔 Winch.STOW_LENGTH 로 짧게 감아 구명환을 끌고 가고, pay_out() 으로 PAYOUT_LENGTH 까지 풀어 건네준다.
+          세계에 Tether(enabled=True, attached=True) 가 있어야 한다 (로프 자체·장력 계산은 가영 tether.py).
         """
+        self.winch = bool(winch)
+        self.delivery_state = STOWED if self.winch else None
+        self._model = None
         self.throttle = 0.0   # 전진 명령 (−1 최대 후진 ~ +1 최대 전진)
         self.steer = 0.0      # 조향 명령 (+ 왼쪽으로 돎)
         self.surface_height = surface_height
@@ -137,9 +146,60 @@ class Robot:
         self.geom_id = self.hull_geom_id
         self.site_ids = (self.thr_l_site_id, self.thr_r_site_id)
 
+        if self.winch:
+            self.tendon_id = find(mujoco.mjtObj.mjOBJ_TENDON, Names.TETHER_TENDON)
+            self._model = model
+            self.reset_winch(model)   # 처음엔 짧게 감긴 상태
+
         # 물은 무게를 모델에서 읽음 → 누가 모델을 바꿔 config 와 달라지면 흘수 정답값이 조용히 틀림
         assert abs(model.body_mass[self.body_id] - Hull.MASS) < 1e-9, (
             f"모델 배 무게 {model.body_mass[self.body_id]} kg ≠ config.Hull.MASS {Hull.MASS} kg")
+
+    # ── 구명환 윈치: 짧게 끌고 가다가 줄을 풀어 건네줌 ─────────────────
+    def _check_winch(self, model=None):
+        if not self.winch:
+            raise ValueError('winch=True 로 만든 로봇만 줄을 감고 풀 수 있습니다.')
+        if model is not None and model is not self._model:
+            raise ValueError('이 로봇이 bind 된 모델이 필요합니다.')
+
+    def rope_length(self, model):
+        """지금 윈치가 내준 로프 기준 길이 [m] (= tendon 스프링 기준 길이, 이보다 길게 늘어나야 장력)."""
+        self._check_winch(model)
+        return float(model.tendon_lengthspring[self.tendon_id, 1])
+
+    def _set_rope_length(self, model, length):
+        # tether.py 는 매 스텝 이 값을 읽어 장력을 계산한다 → 여기만 바꾸면 줄이 풀린다
+        model.tendon_lengthspring[self.tendon_id, :] = (0.0, length)
+
+    def reset_winch(self, model):
+        """줄을 STOW_LENGTH 로 감은 처음 상태로. mj_resetData 는 모델 값을 되돌리지 않으므로 리셋 때 함께 부른다."""
+        self._check_winch(model)
+        self._set_rope_length(model, Winch.STOW_LENGTH)
+        self.delivery_state = STOWED
+
+    def pay_out(self):
+        """건네주기 시작: 다음 스텝부터 PAYOUT_SPEED 로 PAYOUT_LENGTH 까지 줄을 푼다. 이미 시작했으면 False."""
+        self._check_winch()
+        if self.delivery_state != STOWED:
+            return False
+        self.delivery_state = PAYING_OUT
+        return True
+
+    @property
+    def delivery_ready(self):
+        """'건네줬다' 신호 (CONTRACT delivery_ready). 줄을 다 푼 뒤 True.
+
+        True 라고 바로 잡히지는 않음 — 사람 쪽 HumanGrasp.try_grab 이 손과 환의 거리·속도를 다시 확인한다.
+        """
+        return self.delivery_state == PAID_OUT
+
+    def _update_winch(self, model):
+        if self.delivery_state != PAYING_OUT:
+            return
+        length = min(Winch.PAYOUT_LENGTH, self.rope_length(model) + Winch.PAYOUT_SPEED * model.opt.timestep)
+        self._set_rope_length(model, length)
+        if length >= Winch.PAYOUT_LENGTH:
+            self.delivery_state = PAID_OUT
 
     def nozzles_submerged(self, data):
         """(왼쪽, 오른쪽) 노즐이 수면 아래인지. surface_height 가 없으면 항상 (True, True)."""
@@ -161,3 +221,5 @@ class Robot:
                 continue   # 노즐이 공기 중이면 물을 못 밀어 추력 없음
             force_w = frames.body_to_world(data, self.body_id, (thrust, 0.0, 0.0))
             acc.add(self.body_id, force_w, point_w=data.site_xpos[site_id].copy())
+        if self.winch:
+            self._update_winch(model)
