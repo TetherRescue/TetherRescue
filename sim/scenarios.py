@@ -182,7 +182,7 @@ class WearDemo:
 # 배 ↔ 사람 충돌 시험 (tests/test_contact.py, sim/view_contact.py)
 # ─────────────────────────────────────────────────────────────
 # 접근 단계의 사람은 아직 구명환이 없다 (구명환은 배에 실려 있다가 전달된다).
-CONTACT_SETTLE_SECONDS = 5.0   # 사람이 물에 자리 잡는 시간 (측정: 5초 뒤 속도 약 0.008 m/s)
+CONTACT_SETTLE_SECONDS = 5.0   # 사람이 물에 자리 잡는 시간 (측정: 5초 뒤 속도 약 0.003 m/s)
 _FLOATING = (config.Names.HUMAN_BODY,)
 _FREE_JOINTS = (config.Names.HUMAN_FREE,)
 

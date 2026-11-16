@@ -9,8 +9,8 @@ config.Contacts 표에서 배·사람·구명환은 서로 부딪히게 되어 �
 최악 상황을 대신한다.
 
 2026-11-16 측정 (구명환 없는 사람이 물에 5초 자리 잡은 자세, 배와 최소 간격 0.15m에서 출발):
-  1 m/s 충돌(발·옆·머리 쪽): 겹침 최대 3.5mm, 사람 속도 변화 최대 0.22 m/s (완전 탄성 한계 0.44 m/s)
-  최대 추력으로 5초 밀기(발·옆): 겹침 최대 4.0mm, 사람 약 0.7~0.8m 밀려남. 옆에서 밀면 배가 회전할 수 있다.
+  1 m/s 충돌(발·옆·머리 쪽): 겹침 최대 3.0mm, 사람 속도 변화 최대 0.22 m/s (완전 탄성 한계 0.44 m/s)
+  최대 추력으로 5초 밀기(발·옆): 겹침 최대 3.8mm, 사람 약 0.65~0.8m 밀려남. 옆에서 밀면 배가 회전할 수 있다.
   모든 경우 경고·NaN 없음 → 사람 solref(.006, 1)·solimp 설정을 바꾸지 않아도 된다.
 """
 
@@ -20,8 +20,8 @@ pytest.importorskip("mujoco")
 
 from sim.scenarios import ContactDemo  # noqa: E402
 
-MAX_PENETRATION = 0.01        # m. 충돌 겹침 허용 (측정 최대 3.5mm)
-MAX_PUSH_PENETRATION = 0.015  # m. 최대 추력으로 계속 밀 때 (측정 최대 4.0mm)
+MAX_PENETRATION = 0.01        # m. 충돌 겹침 허용 (측정 최대 3.0mm)
+MAX_PUSH_PENETRATION = 0.015  # m. 최대 추력으로 계속 밀 때 (측정 최대 3.8mm)
 HEADINGS = ContactDemo.HEADINGS
 
 
