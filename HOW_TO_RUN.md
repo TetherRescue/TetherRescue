@@ -447,6 +447,23 @@ python -m pytest tests/test_wear.py -q
 GUI는 사람 정면을 따라가는 시점으로 보여줍니다. `--free-camera`로 자동 시점 회전을 끌 수 있습니다.
 headless는 50초 안에 착용이 완료되어야 성공합니다.
 
+## 배가 사람·구명환에 부딪히는 충돌 시험
+
+```bash
+source .venv/bin/activate
+python -m sim.view_contact                     # 발 쪽에서 1 m/s로 충돌
+python -m sim.view_contact --side side         # 옆(구명환 쪽)에서 충돌. head는 머리 쪽
+python -m sim.view_contact --speed 0.3         # 충돌 속도 바꾸기
+python -m sim.view_contact --side side --push  # 정지 상태에서 최대 추력으로 계속 밀기
+```
+
+시작할 때 사람이 물에 자리 잡는 계산(약 5초)을 먼저 합니다. 자리 잡은 사람은 다리가 가라앉고
+구명환·상체가 수면 근처에 있어, 배는 주로 구명환·상체에 닿습니다.
+빨간 화살표는 접촉력, 작은 표시는 접촉점입니다. HUD에서 접촉 수, 현재/최대 겹침(mm),
+사람 속도 변화와 완전 탄성 한계, 사람이 밀린 거리를 확인합니다. 3초(밀기는 6초) 뒤 잠시 멈췄다가 반복합니다.
+옆에서 밀면 배가 마찰로 회전해 사람 둘레를 닿은 채 돌아가는데, 이는 관통이 아닌 정상 물리입니다.
+화면 없이 확인하려면 `--headless`를 붙입니다. 같은 장면의 자동 검사는 `python -m pytest tests/test_contact.py -v`입니다.
+
 ## 잡기·착용 시연의 코드 위치
 
 실행 명령은 `python -m sim.view_grasp`, `python -m sim.view_wear`로 유지합니다.
