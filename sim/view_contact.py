@@ -1,8 +1,7 @@
-"""배가 물에 뜬 사람·구명환에 부딪히는 충돌 시험: python -m sim.view_contact [--side feet|side|head] [--push].
+"""배가 물에 뜬 사람(구명환 없음)에 부딪히는 충돌 시험: python -m sim.view_contact [--side feet|side|head] [--push].
 
 기본은 배가 1 m/s로 달려와 부딪히는 장면이고, --push는 정지 상태에서 최대 추력으로 계속 미는 장면이다.
 장면은 sim/scenarios.py의 ContactDemo이며 tests/test_contact.py와 같다. 끝나면 잠시 멈췄다가 반복한다.
-현재는 구명환을 이미 착용한 사람을 쓴다 (사람 모델 부피가 작아 구명환 없이는 가라앉음 — ContactDemo 설명 참고).
 """
 
 import argparse
@@ -44,7 +43,7 @@ def run_headless(demo, seconds):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--side', choices=tuple(ContactDemo.HEADINGS), default='feet',
-                        help='배가 부딪히는 쪽: feet(발), side(옆·구명환), head(머리)')
+                        help='배가 부딪히는 쪽: feet(발), side(옆), head(머리)')
     parser.add_argument('--speed', type=float, default=1.0, help='충돌 속도 [m/s] (--push 아닐 때)')
     parser.add_argument('--push', action='store_true', help='정지 상태에서 최대 추력으로 계속 밀기')
     parser.add_argument('--gap', type=float, default=0.15, help='출발 시 최소 형상 간격 [m]')
@@ -96,7 +95,7 @@ def main():
             state = demo.readings()
             limit = f" / {state['elastic_limit']:.2f}" if not args.push else ''
             viewer.set_texts([(mujoco.mjtFontScale.mjFONTSCALE_150, mujoco.mjtGridPos.mjGRID_TOPLEFT,
-                               'BOAT-HUMAN CONTACT TEST (ring already worn)\nMode\nTime\nBoat contacts\nOverlap now / max\n'
+                               'BOAT-HUMAN CONTACT TEST (no ring yet)\nMode\nTime\nBoat contacts\nOverlap now / max\n'
                                'Human dv' + (' / elastic limit' if not args.push else '') +
                                '\nHuman pushed\nBoat speed\n\nRed: contact force' +
                                ('\nFinished - restarting' if finished_at else ''),
