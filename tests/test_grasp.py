@@ -62,7 +62,7 @@ def test_rope_pulls_only_ring_before_receipt():
     ring_dof = world.model.jnt_dofadr[ring_joint]
     # 1m 늘어난 줄의 장력 k×1m가 구명환 질량만 가속한다.
     assert world.data.qacc[ring_dof] == pytest.approx(config.Tether.STIFFNESS * 1.0 / config.Lifebuoy.MASS)
-    assert demo.rope.tension(world.model, world.data) == pytest.approx(100.)
+    assert demo.rope.tension(world.model, world.data) == pytest.approx(config.Tether.STIFFNESS * 1.0)
 
 
 @pytest.mark.parametrize('condition', ['no_signal', 'far', 'fast', 'spinning', 'nonfinite'])
