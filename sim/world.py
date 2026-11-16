@@ -33,6 +33,36 @@ def _positive(value, name, *, allow_zero=False):
     return value
 
 
+def check_geom_table(model):
+    """모든 geom이 config.Groups·Contacts 표를 따르는지 확인한다 (통합 충돌 확인).
+
+    - 그룹은 VISUAL·PHYSICS·SENSOR 중 하나여야 한다.
+    - VISUAL·SENSOR geom은 접촉을 꺼야 한다 (contype=conaffinity=0).
+    - PHYSICS geom은 Contacts.ALLOWED_PHYSICS의 (contype, conaffinity) 조합만 쓴다.
+    MjSpec geom의 기본값(group 0, contype 1, conaffinity 1)을 그대로 두면 여기서 걸린다.
+    """
+    import mujoco
+
+    groups, contacts = config.Groups, config.Contacts
+    no_contact = {groups.VISUAL, groups.SENSOR}
+    problems = []
+    for gid in range(model.ngeom):
+        group = int(model.geom_group[gid])
+        pair = (int(model.geom_contype[gid]), int(model.geom_conaffinity[gid]))
+        if group in no_contact:
+            ok = pair == (0, 0)
+        elif group == groups.PHYSICS:
+            ok = pair in contacts.ALLOWED_PHYSICS
+        else:
+            ok = False
+        if not ok:
+            name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, gid)
+            body = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, model.geom_bodyid[gid])
+            problems.append(f"geom {name or gid} (body {body}): group={group}, contype/conaffinity={pair}")
+    if problems:
+        raise ValueError("config.Groups·Contacts 표와 맞지 않는 geom이 있습니다:\n  " + "\n  ".join(problems))
+
+
 def build_world(*, parts=None, timestep=None, gravity=None, integrator=None):
     """모듈 build → compile → bind 후 초기 상태까지 준비한다.
 
@@ -94,6 +124,7 @@ def build_world(*, parts=None, timestep=None, gravity=None, integrator=None):
         raise ValueError("모듈의 build()가 world.py 소유의 전역 물리 설정을 변경했습니다.")
 
     model = spec.compile()
+    check_geom_table(model)
     for part in parts:
         part.bind(model)
     data = mujoco.MjData(model)
