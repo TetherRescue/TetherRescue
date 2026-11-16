@@ -100,6 +100,8 @@ python -m sim.view_human
 
 ## 로프 견인 시험 보기
 
+> 이 시험은 구명환을 이미 착용했다고 가정하고 견인 단계만 떼어 본 것입니다. 실제 흐름은 배가 줄+구명환을 건네주고 사람이 받거나 착용한 뒤 견인합니다.
+
 ```bash
 source .venv/bin/activate
 python -m sim.view_tether
@@ -135,6 +137,8 @@ python -m pytest tests/test_tether.py -v
 `python -m pytest tests/test_rope_visual.py -v`는 끝점 일치·표시 길이 보존·실제 표시 구간 길이를 검증합니다.
 
 ## 물 위에서 배가 사람을 견인하는 시험
+
+> 이 시험은 구명환을 이미 착용했다고 가정하고 견인 단계만 떼어 본 것입니다. 실제 흐름은 배가 줄+구명환을 건네주고 사람이 받거나 착용한 뒤 견인합니다.
 
 ```bash
 python -m sim.view_towing
@@ -448,6 +452,8 @@ GUI는 사람 정면을 따라가는 시점으로 보여줍니다. `--free-camer
 headless는 50초 안에 착용이 완료되어야 성공합니다.
 
 ## 배가 사람·구명환에 부딪히는 충돌 시험
+
+> 현재 장면의 사람은 구명환을 이미 착용한 상태입니다. 실제 접근 단계의 사람은 구명환이 없지만, 사람 모델 부피가 작아 구명환 없이는 가라앉아서 임시로 착용 상태를 씁니다.
 
 ```bash
 source .venv/bin/activate

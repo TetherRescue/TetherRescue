@@ -60,7 +60,7 @@
   표에 없는 그룹, 접촉이 켜진 VISUAL·SENSOR geom, 표에 없는 (contype, conaffinity) 조합이 있으면 조립을 중단합니다.
   MjSpec 기본값(group 0, contype 1, conaffinity 1)을 그대로 둔 geom도 여기서 걸리므로 새 형상은 반드시 지정합니다.
 - 이 표를 바꾸는 PR에는 가영 + 해당 형상 담당(배: 동경, 수면 표시: 미현)을 태그합니다.
-- 실제 충돌 시험(`tests/test_contact.py`, 2026-11-16): 물에 자리 잡은 사람·구명환에 배가 발·옆·머리 쪽에서
+- 실제 충돌 시험(`tests/test_contact.py`, 2026-11-16): 임시로 구명환을 착용한 채 물에 자리 잡은 사람에 배가 발·옆·머리 쪽에서
   1 m/s로 부딪히면 겹침 최대 4mm, 사람 속도 변화는 완전 탄성 한계 이내(0.18 / 0.43 m/s)입니다.
   최대 추력으로 5초 밀어도 겹침 5mm 이하이며 경고·NaN이 없습니다. 옆에서 밀면 배가 마찰로 회전해
   사람 둘레를 닿은 채 돌아가는데, 이는 관통이 아닌 정상 물리입니다. 현재 solref·solimp는 조정하지 않습니다.
@@ -89,8 +89,11 @@
 
 - `Human.TOW_POINT_B`와 `Names.HUMAN_TOW_SITE`: 이전 직접 연결 초안의 예약 항목으로 사용하지 않습니다.
   실제 로프 끝은 구명환의 `Names.LIFEBUOY_TOW_SITE`에 연결합니다.
-- `Tether.ATTACH_ON_START`: 연결 시점 — 동경·태수와 확인.
-- `Tether.BREAK_FORCE`: 끊김 모델 도입 여부와 기준 — 후속 범위 결정 필요.
+- `Tether.ATTACH_ON_START = True` (가영 제안, 동경·태수 확인 필요): 줄은 시작부터 배 ↔ 구명환에 묶여 있습니다.
+  프로젝트 흐름은 배에 구명환을 싣고 출발 → 사람에게 닿지 않고 가까이 정지 → 줄+구명환 전달 → 사람이 받거나 착용 → 견인입니다.
+  사람 ↔ 구명환 연결은 `HumanGrasp`·`SelfWear`가 맡습니다. 배의 탑재·전달 장치는 로봇(동경), 단계 연결은 태수 범위입니다.
+- `Tether.BREAK_FORCE = 13000.0` (가영 제안): NFPA 1983 투척줄 최소 파단 강도입니다. 이 배의 최대 추력 합은 100N이고
+  측정한 최대 장력은 133N이라 도달할 수 없으므로, 1주차는 끊김 기능을 구현하지 않습니다(`tether.py`가 읽지 않음).
 - 사람의 부력·물 저항은 `Water(floating_bodies=[Names.HUMAN_BODY])`로 시험 적용하며, 물성·인계 방식은 미현과 확인.
 - `Groups` 번호 및 `contype`·`conaffinity` 충돌 규칙 — 아래 'Geom 그룹·충돌' 절에서 정리했습니다.
 - 로봇 쪽 연결점은 기존 합의 이름 `Names.TOW_POINT_SITE` (`tow_point`)를 사용하며 위치는 로봇 담당과 확인.
@@ -134,7 +137,7 @@
 - 실제 연결 대상은 `Names.TOW_POINT_SITE` → `Names.LIFEBUOY_TOW_SITE`입니다.
   `build` 전에 두 site를 생성하고, `bind`에서 tendon·site·몸체 ID를 저장합니다.
 - 실제 연결 단계가 미완성이므로 기본 세계는 `Tether(enabled=False)`로 명시합니다.
-  이는 `ATTACH_ON_START=None`을 False로 해석한 것이 아닙니다. 시험에서만 `enabled=True`를 사용합니다.
+  `ATTACH_ON_START=True`는 프로젝트 흐름의 결정이며, 배 탑재·전달 장치가 생기면 기본 세계에도 반영합니다. 시험에서는 `enabled=True`를 명시합니다.
   `enabled`는 조립 여부이고 `attached`는 실행 중 연결 여부입니다. 자동 연결은 아래 전체 시나리오에서 시험합니다.
 - MuJoCo의 `springlength=(0, REST_LENGTH)`로 기준 길이 이하의 스프링 힘을 없앱니다.
   엔진이 스프링을 계산하며 같은 스프링 힘을 ForceAccumulator에 중복 추가하지 않습니다.
@@ -260,7 +263,7 @@
 
 - `Tether(enabled=True, attached=False)`는 tendon을 조립하되 초기 스프링 계수를 0으로 둡니다.
   `enabled=False`는 기존처럼 tendon을 생성하지 않습니다. enabled=True의 attached 생략 기본값은 True로
-  기존 독립 시험의 처음부터 연결된 동작을 유지합니다. ATTACH_ON_START 미합의 값은 변경하지 않습니다.
+  기존 독립 시험의 처음부터 연결된 동작을 유지합니다. 이 흐름(착용한 사람에 접근 후 줄 연결)은 `ATTACH_ON_START=True` 결정 이전의 시험 흐름입니다.
 - `attach(model)`/`detach(model)`는 해당 모델에 bind된 tendon의 스프링 계수를 복원/0으로 바꿉니다.
   감쇠 보정도 detached에서는 0입니다. 위치·속도·기준 길이·질량은 변경하지 않습니다.
   연결/해제 뒤 파생 힘을 읽기 전에는 mj_forward가 필요하며 정상 스텝 루프에서 이를 수행합니다.
