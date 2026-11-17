@@ -103,3 +103,31 @@ def test_humanoid_rejects_invalid_mass_distribution(monkeypatch, fractions):
     monkeypatch.setattr(config.Human, "MASS_FRACTIONS", fractions)
     with pytest.raises(ValueError, match="MASS_FRACTIONS"):
         build_world(parts=[Human()])
+
+
+@pytest.mark.parametrize("name", ["ARM_SEGMENT_FRACTIONS", "LEG_SEGMENT_FRACTIONS"])
+@pytest.mark.parametrize("fractions", [(0.5, 0.5), (0.5, 0.4, 0.2), (1.2, -0.1, -0.1)])
+def test_humanoid_rejects_invalid_segment_split(monkeypatch, name, fractions):
+    # 팔·다리 안쪽 세 분절 비율은 합이 1인 양수 3개여야 한다.
+    monkeypatch.setattr(config.Human, name, fractions)
+    with pytest.raises(ValueError, match=name):
+        build_world(parts=[Human()])
+
+
+def test_segment_split_sets_actual_geom_masses():
+    # 팔·다리 분절 질량이 config 비율대로 들어간다 (de Leva 값).
+    world = build_world(parts=[Human()])
+    model = world.model
+    arm = config.Human.MASS * config.Human.MASS_FRACTIONS[2]
+    leg = config.Human.MASS * config.Human.MASS_FRACTIONS[4]
+    upper_arm = model.geom(config.Names.HUMAN_ARM_L_GEOM).id
+    thigh = model.geom(config.Names.HUMAN_LEG_L_GEOM).id
+    hand = model.geom(f"{config.Names.HUMAN_DETAIL_PREFIX}_hand_l").id
+    foot = model.geom(f"{config.Names.HUMAN_DETAIL_PREFIX}_foot_l").id
+    # 고정 사람의 형상은 한 body에 합쳐지므로 geom 질량은 컴파일 전 spec에서 확인한다.
+    spec_geoms = {g.name: g.mass for g in world.spec.geoms}
+    for name, expected in ((model.geom(upper_arm).name, arm * config.Human.ARM_SEGMENT_FRACTIONS[0]),
+                           (model.geom(hand).name, arm * config.Human.ARM_SEGMENT_FRACTIONS[2]),
+                           (model.geom(thigh).name, leg * config.Human.LEG_SEGMENT_FRACTIONS[0]),
+                           (model.geom(foot).name, leg * config.Human.LEG_SEGMENT_FRACTIONS[2])):
+        assert spec_geoms[name] == pytest.approx(expected)

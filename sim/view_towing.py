@@ -1,5 +1,8 @@
 """배 → 로프 → 구명환·사람 수상 견인 시험. --dry로 기존 무중력 시험을 선택한다.
 
+구명환을 이미 착용했다고 가정하고 견인 단계만 떼어 본 시험이다.
+실제 흐름(배가 구명환을 건네줌 → 사람이 받거나 착용 → 견인)은 view_grasp·view_wear와 단계 연결에서 다룬다.
+
 python -m sim.view_towing [--headless]
 """
 
@@ -92,8 +95,8 @@ def main():
                     viewer.cam.lookat[:] = (world.data.xpos[robot.body_id] + world.data.xpos[human.body_id]) / 2
             viewer.set_texts([(mujoco.mjtFontScale.mjFONTSCALE_150,
                                mujoco.mjtGridPos.mjGRID_TOPLEFT,
-                               ('DRY TOWING TEST\nGravity / buoyancy / drag OFF\nRepeats every 2 seconds' if args.dry
-                                else 'SURFACE TOWING TEST\nGravity / buoyancy / water drag ON\nContinuous simulation'),
+                               ('DRY TOWING TEST (ring already worn)\nGravity / buoyancy / drag OFF\nRepeats every 2 seconds' if args.dry
+                                else 'SURFACE TOWING TEST (ring already worn)\nGravity / buoyancy / water drag ON\nContinuous simulation'),
                                f'Tension: {rope.tension(world.model, world.data):.1f} N')])
             viewer.sync()
             time.sleep(max(0, 1 / 60 - (time.monotonic() - started)))
