@@ -26,6 +26,11 @@ def test_boat_tows_human_for_thousand_steps_without_reset():
 
 def test_rope_reaction_preserves_total_linear_momentum_without_thrust():
     world, robot, human, rope = build_towing_world()
+    # 실제 로프 강성(1만 N/m)에서는 무중력의 환·사람이 줄에 홱 당겨져 20 rad/s 넘게 돈다.
+    # 기본 적분기(implicitfast, 0.002 s)는 빠른 회전의 원심 항에서 운동량 오차 ≈ 0.2 kg·m/s 를 만든다
+    # (시간 간격 1/4 → 오차 1/4 로 줄어 수치 오차임을 확인, 2026-11-17).
+    # 이 시험은 '줄 반작용이 같고 반대인가'를 보므로 회전 적분 오차가 작은 RK4 로 돌린다.
+    world.model.opt.integrator = mujoco.mjtIntegrator.mjINT_RK4
     robot.set_command(0)
     initial_distance = world.data.ten_length[rope.tendon_id]
     for _ in range(500):
@@ -34,8 +39,8 @@ def test_rope_reaction_preserves_total_linear_momentum_without_thrust():
     for body_id in range(1, world.model.nbody):
         velocity, _ = body_velocity_w(world.model, world.data, body_id)
         momentum += world.model.body_mass[body_id] * velocity
-    # 총 322kg의 회전 강체 적분 오차: 잔여 속도 약 3e-6 m/s 이하 허용.
-    np.testing.assert_allclose(momentum, 0, atol=1e-3)
+    # 총 322kg. RK4 측정 오차 ≈ 0.002 kg·m/s (잔여 속도 약 6e-6 m/s) → 여유를 두고 5e-3 허용.
+    np.testing.assert_allclose(momentum, 0, atol=5e-3)
     assert world.data.ten_length[rope.tendon_id] < initial_distance
     assert world.data.xpos[robot.body_id, 0] < 4
     assert world.data.xpos[human.body_id, 0] > 0
