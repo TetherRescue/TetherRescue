@@ -253,14 +253,20 @@ def boat_drag_coefficients(mass, inertia, size=None, gravity=config.Physics.GRAV
 def wetted_drag(coeffs, wet_ratio, damping_scale):
     """잠긴 정도에 맞춰 저항 계수를 줄인다. 물 밖으로 나오면 저항이 사라진다.
 
-    wet_ratio     : 잠긴 부피 ÷ 전체 부피 (0 ~ 1). 2차 항의 면적을 이만큼 줄인다
+    wet_ratio     : 잠긴 부피 ÷ 전체 부피 (0 ~ 1). 2차 항 중 앞뒤·옆(surge·sway) 면적을 이만큼 줄인다
                     (똑바로 떠 있으면 높이 × wet_ratio = 흘수 → 앞면 넓이 = 폭 × 흘수)
     damping_scale : min(1, 잠긴 부피 × ρ ÷ 질량). 평형 잠김량 이상이면 1 → 감쇠비 계약값 그대로.
-                    선형 항과 회전 항 전체에 곱한다
+                    선형 항, 회전 항, heave 2차 항에 곱한다
+
+    heave(위아래) 2차 항은 wet_ratio 로 줄이지 않는다.
+      위아래로 물을 미는 면은 바닥(길이 × 폭)이라, 얼마나 잠겼든 넓이가 같기 때문.
+      (wet_ratio 를 곱하면 흘수 상태에서 바닥 넓이가 약 1/8 로 줄어든 것처럼 계산됨)
+      물 밖으로 나오면 사라지도록 damping_scale 만 곱한다.
     """
+    quad_scale = np.array([wet_ratio, wet_ratio, damping_scale])   # (surge, sway, heave)
     return {
         "lin": coeffs["lin"] * damping_scale,
-        "quad": coeffs["quad"] * wet_ratio,
+        "quad": coeffs["quad"] * quad_scale,
         "rot_lin": coeffs["rot_lin"] * damping_scale,
         "rot_quad": coeffs["rot_quad"] * damping_scale,
     }

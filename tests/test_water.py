@@ -315,6 +315,18 @@ def test_sideways_harder_than_forward():
     assert abs(sideways[1]) > 3 * abs(forward[0])
 
 
+def test_heave_quad_uses_full_bottom_area():
+    # 위아래로 물을 미는 면은 바닥(길이 × 폭)이라 잠긴 깊이와 상관없이 넓이가 같다.
+    #   → 앞뒤·옆 2차 계수만 잠긴 비율만큼 줄고, heave 2차 계수는 damping_scale 만 곱해진다.
+    wet = config.Expect.DRAFT / config.Hull.HEIGHT
+    full = water.wetted_drag(BASE_COEFFS, wet, 1.0)
+    np.testing.assert_allclose(full["quad"][:2], BASE_COEFFS["quad"][:2] * wet)
+    assert full["quad"][2] == pytest.approx(BASE_COEFFS["quad"][2])
+    # 물 밖으로 나오면(damping_scale 0) heave 2차 저항도 사라진다
+    dry = water.wetted_drag(BASE_COEFFS, 0.0, 0.0)
+    assert dry["quad"][2] == 0.0
+
+
 # ── 방향: 저항은 언제나 움직임의 반대 ──
 def test_no_motion_no_drag():
     force_b, torque_b = water.drag_b([0, 0, 0], [0, 0, 0], COEFFS)
