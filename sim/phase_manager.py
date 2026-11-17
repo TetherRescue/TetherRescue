@@ -22,16 +22,16 @@ class Phase(str, Enum):
 class ApproachSettings:
     """잔잔한 물의 현재 선체에 맞춘 시험용 제어값. 거리 m, 속도 m/s, 각도 rad."""
 
-    max_speed: float = .5
-    distance_gain: float = .18
+    max_speed: float = 1.0  # 2026-11-17 접근 속도 조정: .5 → 1.0
+    distance_gain: float = .4  # 가까워질 때 감속 기울기: .18 → .4 (2 m 앞에서 0.8 m/s)
     speed_gain: float = 60.0  # N / (m/s)
     position_gain: float = 30.0  # 정지 유지 N/m
     heading_gain: float = 1.4  # 목표 yaw 속도 / 방향 오차
     yaw_speed_gain: float = 12.0  # N·m / (rad/s)
-    max_yaw_speed: float = .6
+    max_yaw_speed: float = .8
     max_force: float = 60.0
     max_brake_force: float = 30.0
-    max_yaw_torque: float = 6.0
+    max_yaw_torque: float = 10.0  # 추진기 한계 ≈ 12.6 N·m (lever 0.36 m × 70 N / 2)
     capture_radius: float = .05
     position_tolerance: float = .20
     reapproach_radius: float = .21
