@@ -278,7 +278,7 @@ HUD에 연결 여부·장력·사람 진행 거리를 표시합니다. 로프는
 
 연결은 거리·상대속도·방향 조건에 따른 자동 연결 근사이며 실제 접촉·후크 동작은 미구현입니다.
 이번 검증은 현재 선체·인체 형상과 잔잔한 물 조건입니다.
-전복·시뮬레이션 시간 초과·수치 오류는 아래 Watchdog에서 처리합니다. 로프 끊김과 추론 응답 지연 감시는 후속 작업입니다.
+전복·시뮬레이션 시간 초과·수치 오류는 아래 Watchdog에서 처리합니다. 추론 응답이 없으면 안전 모드로 멈추며, 로프 끊김은 후속 작업입니다.
 
 ## 실패 감지와 물리 중단 (Watchdog)
 
@@ -292,6 +292,7 @@ python -m sim.view_rescue --failure-demo capsize
 python -m sim.view_rescue --headless --failure-demo timeout
 python -m sim.view_rescue --headless --failure-demo nonfinite
 python -m sim.view_rescue --headless --failure-demo warning
+python -m sim.view_rescue --headless --failure-demo inference
 python -m pytest tests/test_watchdog.py -q
 ```
 
@@ -311,6 +312,7 @@ headless의 `--timeout`은 추가 상한입니다. 더 크게 지정해도 Watch
 | 전복 | roll 또는 pitch 절댓값 60도 이상 |
 | 비정상 수치 | 위치·속도·가속도·외력 등에 NaN/무한대가 있거나 선체 quaternion이 무효 |
 | MuJoCo 경고 | 누적 warning이 하나라도 있으면 중단 |
+| 추론 무응답 | 실제 시간 0.5초 안에 응답이 없으면 안전 모드. 시뮬레이션 시간과 별개 |
 
 이 값들은 `WatchdogSettings`의 시연용 기준이며 미확정 `config.Capsize` 값을 채우지 않습니다.
 필요하면 Python API로 기준을 전달할 수 있습니다.
@@ -343,7 +345,17 @@ mission.reset()
 ```
 
 `--approach-only`는 기존 독립 접근 시험이므로 전체 시나리오 Watchdog와 오류 주입 옵션을 사용하지 않습니다.
-추론 요청의 실제 응답 지연 감시, 로프 끊김과 고장 복구 정책은 아직 구현하지 않았습니다.
+로프 끊김과 고장 복구 정책은 아직 구현하지 않았습니다.
+
+추론 감시만 실제 시간을 봅니다. 요청이 없으면 시계를 읽지 않으므로 기존 규칙 제어는 그대로 진행합니다.
+응답이 제한 시간(기본 0.5초, `InferenceWatchdogSettings`의 시연값)을 넘기거나 오지 않으면
+`INFERENCE_TIMEOUT`으로 고정하고 추진 명령과 외력을 0으로 둡니다. 로프는 끊지 않습니다.
+재요청은 처음 요청 시각을 연장하지 않으며, 해제는 명시적 `reset`만 가능합니다.
+
+```python
+mission.request_inference()          # 정책에 추론을 보낸 시각
+accepted = mission.receive_inference()  # 제시간이면 True. 늦으면 안전 모드로 멈추고 False
+```
 
 ## 사람이 구명환을 받고 놓는 시험 (배 없이)
 

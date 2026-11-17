@@ -49,13 +49,16 @@ def build_rescue_demo(*, start=(6., 3.), victim=(0., 0.), yaw=0., tow_heading=0.
     return RescueApproach(world, robot, tow_heading=tow_heading)
 
 
-def build_rescue_mission(*, start=(6., 3.), victim=(0., 0.), yaw=0., tow_heading=0., tow_distance=6., watchdog_settings=None):
+def build_rescue_mission(*, start=(6., 3.), victim=(0., 0.), yaw=0., tow_heading=0., tow_distance=6.,
+                         watchdog_settings=None, inference_settings=None, inference_clock=None):
     """처음에는 미연결인 tendon을 생성한 전체 구조 시험. 각도 rad."""
     rope = Tether(enabled=True, attached=False)
     world, robot = _build_rescue_world(start=start, victim=victim, yaw=yaw,
                                        tow_heading=tow_heading, rope=rope)
     return RescueMission(world, robot, rope, tow_heading=tow_heading,
-                         settings=RescueMissionSettings(tow_distance=tow_distance), watchdog_settings=watchdog_settings)
+                         settings=RescueMissionSettings(tow_distance=tow_distance),
+                         watchdog_settings=watchdog_settings, inference_settings=inference_settings,
+                         inference_clock=inference_clock)
 
 
 def run_headless(manager, timeout):
@@ -112,6 +115,10 @@ def apply_failure_demo(manager, kind):
         manager.world.data.qpos[0] = float('nan')
     elif kind == 'warning':
         manager.world.data.warning[mujoco.mjtWarning.mjWARN_BADQACC].number += 1
+    elif kind == 'inference':
+        # 다음 step이 시계를 읽을 때 제한 시각이 되도록, 요청은 0초에 고정한다.
+        manager.request_inference(now=0.0)
+        manager.inference.clock = lambda: manager.inference.settings.response_timeout
     else:
         raise ValueError('알 수 없는 실패 시연입니다.')
 
@@ -119,7 +126,7 @@ def apply_failure_demo(manager, kind):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--headless', action='store_true')
-    parser.add_argument('--failure-demo', choices=('timeout', 'capsize', 'nonfinite', 'warning'),
+    parser.add_argument('--failure-demo', choices=('timeout', 'capsize', 'nonfinite', 'warning', 'inference'),
                         help='Watchdog 중단 동작을 확인하는 오류 주입 시연')
     parser.add_argument('--approach-only', action='store_true', help='기존 로프 없는 연결 대기 시험')
     parser.add_argument('--tow-distance', type=float, default=6., help='연결 후 배의 이동 거리 [m], 4m 초과')
