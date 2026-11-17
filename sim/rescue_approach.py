@@ -45,7 +45,12 @@ class RescueApproach:
     고정된 사람이 아닌 강체 부유 시험이며 전역 장애물 회피 계획기는 아니다.
     """
 
-    def __init__(self, world, robot, *, tow_heading=0., settings=None, navigation=None):
+    def __init__(self, world, robot, *, tow_heading=0., settings=None, navigation=None,
+                 target_site=None, victim_bodies=None):
+        """target_site: 다가갈 기준 site 이름 (기본 = 떠 있는 구명환의 로프 점).
+        배가 환을 싣고 가는 전달 시나리오는 사람 손 site 를 주고, 실린 환은 victim_bodies 에서 뺀다.
+        victim_bodies: 선체와의 간격을 검사할 body 이름들 (기본 = 사람·구명환).
+        """
         import mujoco
 
         if robot not in world.parts or robot.body_id is None:
@@ -56,9 +61,12 @@ class RescueApproach:
             raise ValueError('견인 방향은 유한한 각도여야 합니다.')
         self.target_heading = math.atan2(math.sin(tow_heading), math.cos(tow_heading))
         try:
-            self.ring_site = world.model.site(config.Names.LIFEBUOY_TOW_SITE).id
+            # ring_site = 다가갈 기준 site (이름은 기존 API 호환. 전달 시나리오에서는 사람 손)
+            self.ring_site = world.model.site(target_site or config.Names.LIFEBUOY_TOW_SITE).id
             self.stern_site = world.model.site(config.Names.TOW_POINT_SITE).id
-            human_body = world.model.body(config.Names.HUMAN_BODY).id
+            if victim_bodies is None:
+                victim_bodies = (config.Names.HUMAN_BODY, int(world.model.site_bodyid[self.ring_site]))
+            victim_ids = {name if isinstance(name, int) else world.model.body(name).id for name in victim_bodies}
         except KeyError as error:
             raise ValueError('구명환·선미 연결점이 먼저 조립되어야 합니다.') from error
         if world.model.site_bodyid[self.stern_site] != robot.body_id:
@@ -77,9 +85,8 @@ class RescueApproach:
                                        target_heading=self.target_heading, settings=self.navigation)
         self.stage = RescueStage.TRANSIT
         self._ready_since = None
-        victim_bodies = {human_body, int(world.model.site_bodyid[self.ring_site])}
         self.victim_geoms = tuple(i for i in range(world.model.ngeom)
-                                  if world.model.geom_bodyid[i] in victim_bodies)
+                                  if world.model.geom_bodyid[i] in victim_ids)
         self._clearance = self.clearance()
         self.minimum_observed_clearance = self._clearance
         self._next_clearance_time = float(world.data.time)
