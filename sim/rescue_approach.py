@@ -24,7 +24,7 @@ class RescueApproachSettings:
     staging_gap: float = 3.0
     connection_gap: float = .7
     waypoint_tolerance: float = .5
-    docking_speed: float = .2
+    docking_speed: float = .3  # 마지막 후진 속도 .2 → .3 (2026-11-17)
     gap_tolerance: float = .15
     relative_speed_tolerance: float = .06
     ready_hold_seconds: float = 1.0
