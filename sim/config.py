@@ -581,6 +581,26 @@ class Lifebuoy:
 
 
 # ─────────────────────────────────────────────────────────────
+# 9-1. 구명환 윈치 — 로봇 (동경). 2026-11-16 가영과 합의: 배가 구명환을 짧은 로프로 끌고 가다가
+#      사람 근처에서 줄을 풀어 건네준다. 줄은 끊지 않고 그대로 견인에 쓴다.
+#      어떻게 다가가 건넬지(접근 경로)는 시나리오에서 정함 — 선미를 대고 후진해 환을 미는 방식은
+#      2026-11-16 시험에서 환이 옆으로 미끄러져 실패 → 사람 옆을 지나가며 건네는 방식 시험 예정
+# ─────────────────────────────────────────────────────────────
+class Winch:
+    # 무엇: 끌고 갈 때 감아 둔 로프 기준 길이 [m] (tendon 스프링 기준 길이. 이보다 늘어나야 장력).
+    # 사용: 로봇 bind·reset_winch (Robot(winch=True)). 빌드 때 Tether.REST_LENGTH 값을 이 값으로 바꾼다
+    # 이유: 짧아야 이동 중 환이 덜 휘둘림. 0.3 m 이하는 환이 선미에 걸려 배가 못 돌았음 (2026-11-16 시험).
+    #       시험값 [동경 / 제안] — 길이는 11/23 회의에서 정함
+    STOW_LENGTH = 1.0
+    # 무엇: 건네줄 때 풀어 주는 최종 길이 [m]. 다 풀면 delivery_ready = True. 견인도 이 길이로 한다
+    # 이유: 배가 사람에게서 떨어진 채 끌 수 있는 여유. 시험값 [동경 / 제안]
+    PAYOUT_LENGTH = 3.0
+    # 무엇: 줄을 푸는 속도 [m/s]. (3 − 1) / 0.5 = 4 초에 다 풀림
+    # 이유: 시험값 [동경 / 제안]. 너무 빠르면 의미 없고, 느리면 사람이 기다림
+    PAYOUT_SPEED = 0.5
+
+
+# ─────────────────────────────────────────────────────────────
 # 9-2. 줄 모델 내부 설정 — 가영의 독립 구현용 시험 초안
 # ─────────────────────────────────────────────────────────────
 # 아래 값은 tendon 스프링·인장 감쇠 실험의 출발점일 뿐,
@@ -746,6 +766,13 @@ def _check_water_robot():
     # 중력은 채워졌다면 양수 (부호는 아래 방향으로 water.py 가 처리)
     if Physics.GRAVITY is not None and Physics.GRAVITY <= 0:
         raise ValueError(f"Physics.GRAVITY 는 0 보다 커야 함 (지금 {Physics.GRAVITY}).")
+
+    # 윈치: 감은 길이 < 푼 길이, 푸는 속도 양수
+    if not 0 < Winch.STOW_LENGTH < Winch.PAYOUT_LENGTH:
+        raise ValueError(f"Winch: 0 < STOW_LENGTH < PAYOUT_LENGTH 여야 함 "
+                         f"(지금 {Winch.STOW_LENGTH}, {Winch.PAYOUT_LENGTH}).")
+    if Winch.PAYOUT_SPEED <= 0:
+        raise ValueError(f"Winch.PAYOUT_SPEED 는 0 보다 커야 함 (지금 {Winch.PAYOUT_SPEED}).")
 
 
 _check_water_robot()
