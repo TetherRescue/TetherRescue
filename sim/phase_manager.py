@@ -39,6 +39,9 @@ class ApproachSettings:
     heading_tolerance: float = math.radians(8)
     yaw_speed_tolerance: float = .03
     arrival_hold_seconds: float = 1.0
+    # 목표가 선수에서 이 각보다 뒤에 있으면 후진, 이 각 안으로 들어오면 전진 복귀
+    reverse_enter_angle: float = math.radians(120)
+    reverse_exit_angle: float = math.radians(60)
 
     def __post_init__(self):
         for field in fields(self):
@@ -49,6 +52,8 @@ class ApproachSettings:
             raise ValueError("capture_radius <= position_tolerance < reapproach_radius가 필요합니다.")
         if self.heading_tolerance >= math.pi:
             raise ValueError("방향 허용 오차는 pi보다 작아야 합니다.")
+        if not self.reverse_exit_angle < self.reverse_enter_angle < math.pi:
+            raise ValueError("reverse_exit_angle < reverse_enter_angle < pi가 필요합니다.")
 
 
 def _angle(value):
@@ -87,6 +92,7 @@ class PhaseManager:
         """월드 리셋 또는 새 접근 시험 시작 후 호출한다. 물리 상태는 바꾸지 않는다."""
         self.phase = Phase.APPROACH
         self.arrival_seconds = 0.0
+        self.reversing = False
         self._last_control_time = None
         self._next_control_time = float(self.world.data.time)
         self.forward = self.steering = 0.0
@@ -142,10 +148,16 @@ class PhaseManager:
             desired_speed = min(settings.max_speed, settings.distance_gain * state['distance'])
             desired_velocity = desired_speed * state['error'] / state['distance']
             force_w = settings.speed_gain * (desired_velocity - state['velocity'])
-            heading = math.atan2(force_w[1], force_w[0])
-            heading_error = _angle(heading - state['yaw'])
-            # 필요한 힘이 뒤쪽이면 후진 추력을 사용해 제동한다.
-            if abs(heading_error) > math.pi / 2:
+            # 뱃머리는 목표 방향을 본다. 보정 힘(force_w)은 작을 때 방향이 크게 흔들려
+            # 그쪽을 보면 좌우 회전이 계속 뒤바뀐다 (2026-11-17 측정: 접근 중 32~50회).
+            # 제동·가속은 아래 force(보정 힘의 선수 방향 성분)가 맡는다.
+            heading_error = _angle(math.atan2(desired_velocity[1], desired_velocity[0]) - state['yaw'])
+            # 목표가 뒤쪽이면 선미로 간다. 경계(90°)에서 오가지 않게 전환 각에 여유를 둔다.
+            if not self.reversing and abs(heading_error) > settings.reverse_enter_angle:
+                self.reversing = True
+            elif self.reversing and abs(heading_error) < settings.reverse_exit_angle:
+                self.reversing = False
+            if self.reversing:
                 heading_error = _angle(heading_error + math.pi)
             force = float(force_w @ direction)
         else:
