@@ -38,7 +38,7 @@ def test_initially_independent_not_worn_and_rope_already_connected():
     assert model.body_parentid[demo.ring.body_id] == 0
     assert model.body_parentid[demo.human.body_id] == 0
     assert model.body_mass[demo.human.body_id] == pytest.approx(70)
-    assert model.body_mass[demo.ring.body_id] == pytest.approx(2)
+    assert model.body_mass[demo.ring.body_id] == pytest.approx(config.Lifebuoy.MASS)
     assert model.nv == 18  # 시험 질점·사람·구명환 각각 자유 관절
     assert not demo.grasp.is_held(data)
     assert demo.rope.attached
@@ -60,8 +60,9 @@ def test_rope_pulls_only_ring_before_receipt():
     np.testing.assert_allclose(world.data.qacc[dof:dof + 6], 0, atol=1e-10)
     ring_joint = world.model.joint(config.Names.LIFEBUOY_FREE).id
     ring_dof = world.model.jnt_dofadr[ring_joint]
-    assert world.data.qacc[ring_dof] == pytest.approx(50.)
-    assert demo.rope.tension(world.model, world.data) == pytest.approx(100.)
+    # 1m 늘어난 줄의 장력 k×1m가 구명환 질량만 가속한다.
+    assert world.data.qacc[ring_dof] == pytest.approx(config.Tether.STIFFNESS * 1.0 / config.Lifebuoy.MASS)
+    assert demo.rope.tension(world.model, world.data) == pytest.approx(config.Tether.STIFFNESS * 1.0)
 
 
 @pytest.mark.parametrize('condition', ['no_signal', 'far', 'fast', 'spinning', 'nonfinite'])
@@ -154,7 +155,7 @@ def test_releasing_preserves_momentum_and_removes_further_direct_rope_force():
         demo.fixture.target[0] += .001
         physics_step(world)
     new_velocity, _ = body_velocity_w(world.model, world.data, demo.human.body_id)
-    np.testing.assert_allclose(new_velocity, velocity, atol=1e-8)
+    np.testing.assert_allclose(new_velocity, velocity, atol=1e-6)  # 1스텝 수치 오차 수준 (측정 6e-8)
     assert np.linalg.norm(world.data.xipos[demo.human.body_id] - start) > .05
     assert world.data.nefc == 0
     assert not demo.grasp.is_held(world.data)

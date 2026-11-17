@@ -80,7 +80,7 @@ def test_articulated_arms_keep_mass_and_bounded_internal_motors():
     demo = WearDemo()
     model = demo.world.model
     assert model.body_subtreemass[demo.human.body_id] == pytest.approx(70.)
-    assert model.body_mass[demo.ring.body_id] == pytest.approx(2.)
+    assert model.body_mass[demo.ring.body_id] == pytest.approx(config.Lifebuoy.MASS)
     assert (model.nu, model.nv) == (14, 32)
     np.testing.assert_array_equal(model.actuator_forcerange[:, 1], [40.] * 4 + [22.] * 3 + [40.] * 4 + [22.] * 3)
     np.testing.assert_array_equal(model.actuator_forcerange[:, 0], -model.actuator_forcerange[:, 1])

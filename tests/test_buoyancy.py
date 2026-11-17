@@ -48,7 +48,8 @@ def test_human_ring_voxels_preserve_open_center_and_sufficient_volume():
     ring_id = world.model.body(config.Names.LIFEBUOY_BODY).id
     ring_points, ring_half, _ = body_voxels(world.model, ring_id, .04)
     displaced_mass = (np.prod(half * 2) * len(points) + np.prod(ring_half * 2) * len(ring_points)) * 1025
-    assert 72 < displaced_mass < 110
+    # 사람(약 71.9L)+환(약 35.5L)이 완전히 잠기면 약 110kg을 띄운다. 하한: 사람+환 질량(72.5kg)보다 커야 뜬다.
+    assert config.Human.MASS + config.Lifebuoy.MASS < displaced_mass < 120
     # 환 평면 중심에서 몸통 바깥·환 안쪽의 빈 공간은 채우지 않는다.
     empty = np.array([.35, 0, .18])
     assert not np.any(np.all(np.abs(points - empty) <= half, axis=1))
