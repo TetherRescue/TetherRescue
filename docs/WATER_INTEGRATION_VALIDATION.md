@@ -30,7 +30,7 @@ python -m pytest tests/test_water.py tests/test_robot.py tests/test_water_physic
 python tests/measure_water_integration.py --case all
 ```
 
-측정 스크립트는 시나리오마다 JSON 한 줄을 출력한다. `--case calm_approach`, `calm_mission`, `waves_boat`, `waves_towing`, `waves_approach`, `waves_mission`으로 하나씩 재현할 수 있다. 완료 조건을 만족하지 못한 경우 종료 코드 1을 반환하고 실패 이유를 출력한다. 관측 결과를 통과시키기 위해 제어기·임계값을 완화하지 않는다.
+측정 스크립트는 시나리오마다 JSON 한 줄을 출력한다. `--case calm_approach`,ㅂ `calm_mission`, `waves_boat`, `waves_towing`, `waves_approach`, `waves_mission`으로 하나씩 재현할 수 있다. 완료 조건을 만족하지 못한 경우 종료 코드 1을 반환하고 실패 이유를 출력한다. 관측 결과를 통과시키기 위해 제어기·임계값을 완화하지 않는다.
 
 ## 해석 한계
 
