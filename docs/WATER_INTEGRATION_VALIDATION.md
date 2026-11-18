@@ -30,7 +30,7 @@ python -m pytest tests/test_water.py tests/test_robot.py tests/test_water_physic
 python tests/measure_water_integration.py --case all
 ```
 
-측정 스크립트는 시나리오마다 JSON 한 줄을 출력한다. `--case calm_approach`,ㅂ `calm_mission`, `waves_boat`, `waves_towing`, `waves_approach`, `waves_mission`으로 하나씩 재현할 수 있다. 완료 조건을 만족하지 못한 경우 종료 코드 1을 반환하고 실패 이유를 출력한다. 관측 결과를 통과시키기 위해 제어기·임계값을 완화하지 않는다.
+측정 스크립트는 시나리오마다 JSON 한 줄을 출력한다. `--case calm_approach`, `calm_mission`, `waves_boat`, `waves_towing`, `waves_approach`, `waves_mission`으로 하나씩 재현할 수 있다. 완료 조건을 만족하지 못한 경우 종료 코드 1을 반환하고 실패 이유를 출력한다. 관측 결과를 통과시키기 위해 제어기·임계값을 완화하지 않는다.
 
 ## 해석 한계
 
@@ -42,6 +42,11 @@ python tests/measure_water_integration.py --case all
 ## 2026-11-16 실행 결과
 
 기존 관련 테스트 6개 파일은 **137 passed in 216.52 s**였다. 원격 CI 결과가 아니라 위 명령의 로컬 실행 결과다. 추가 측정의 실패는 아래 표에 별도로 기록한다.
+기존 관련 테스트 6개 파일은 **137 passed in 216.52 s**였다(`5d6e82e` 기준). 원격 CI 결과가 아니라 위 명령의 로컬 실행 결과다.
+
+## 2026-11-17 실행 결과
+
+2026-11-17 최신 코드(`bc68d3a`+ 미커밋 변경)에서 같은 6개 파일을 재실행한 결과는 **143 passed in 187.87 s**다. 시험 수 증가는 이후 main에 추가된 검사(로봇 윈치 등)와 채연 브랜치의 기본 조립 검사 때문이며, 실패·건너뜀은 없었다. 로컬 실행이며 원격 CI 결과가 아니다.
 
 | 측정 조건 | 관측 종료 (s) | 최초 완료 (s) | 최대 전체 기울기 (°) | 최대 장력 (N) | 좌/우 노즐 노출 비율 | 판정 |
 | --- | ---: | ---: | ---: | ---: | --- | --- |
