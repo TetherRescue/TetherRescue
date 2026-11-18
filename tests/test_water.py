@@ -147,7 +147,7 @@ CALM = WaterParams.WAVES_CALM
 RHO_G = config.Physics.RHO_WATER * config.Physics.GRAVITY
 HULL_VOLUME = config.Hull.LENGTH * config.Hull.BEAM * config.Hull.HEIGHT
 # 흘수만큼 잠긴 위치: 원점(상자 중심)이 수면 위 (높이/2 − 흘수) 에 있어야 선체 바닥이 수면 아래 흘수 깊이에 온다
-#   0.4/2 − 0.1016 = +0.0984 m
+#   0.2/2 − 0.0245 ≈ +0.0755 m   (Hull.HEIGHT 0.2 m, Expect.DRAFT ≈ 2.45 cm)
 FLOAT_Z = config.Hull.HEIGHT / 2 - config.Expect.DRAFT
 
 
@@ -214,7 +214,7 @@ def test_buoyancy_points_up_only():
 
 
 def test_floats_at_hand_draft():
-    # 완료 기준 미리 확인: 흘수 0.1016 m 위치에서 부력 합 = 배 무게
+    # 완료 기준 미리 확인: 흘수(Expect.DRAFT ≈ 0.0245 m) 위치에서 부력 합 = 배 무게
     model, data, bid = _boat()
     forces, _, _ = water.voxel_buoyancy(data, bid, waves=CALM)
     weight = model.body_subtreemass[bid] * config.Physics.GRAVITY  # 배 무게도 MuJoCo 모델에서 읽음
@@ -313,6 +313,18 @@ def test_sideways_harder_than_forward():
     forward, _ = water.drag_b([1.0, 0, 0], [0, 0, 0], COEFFS)
     sideways, _ = water.drag_b([0, 1.0, 0], [0, 0, 0], COEFFS)
     assert abs(sideways[1]) > 3 * abs(forward[0])
+
+
+def test_heave_quad_uses_full_bottom_area():
+    # 위아래로 물을 미는 면은 바닥(길이 × 폭)이라 잠긴 깊이와 상관없이 넓이가 같다.
+    #   → 앞뒤·옆 2차 계수만 잠긴 비율만큼 줄고, heave 2차 계수는 damping_scale 만 곱해진다.
+    wet = config.Expect.DRAFT / config.Hull.HEIGHT
+    full = water.wetted_drag(BASE_COEFFS, wet, 1.0)
+    np.testing.assert_allclose(full["quad"][:2], BASE_COEFFS["quad"][:2] * wet)
+    assert full["quad"][2] == pytest.approx(BASE_COEFFS["quad"][2])
+    # 물 밖으로 나오면(damping_scale 0) heave 2차 저항도 사라진다
+    dry = water.wetted_drag(BASE_COEFFS, 0.0, 0.0)
+    assert dry["quad"][2] == 0.0
 
 
 # ── 방향: 저항은 언제나 움직임의 반대 ──
@@ -439,7 +451,7 @@ def test_bind_reads_model():
 
 
 def test_drop_settles_at_hand_draft():
-    # ★ 1주차 완료 기준: 물 위 5 cm 에서 떨어뜨리면 출렁이다가 손 계산 흘수(0.1016 m)에 멈춘다
+    # ★ 1주차 완료 기준: 물 위 5 cm 에서 떨어뜨리면 출렁이다가 손 계산 흘수(Expect.DRAFT ≈ 0.0245 m)에 멈춘다
     world, _, _ = _sim_world(lift=0.05)
     drafts = _run(world, seconds=5.0)
     assert np.all(np.isfinite(drafts)), "계산이 폭발함 (NaN)"
