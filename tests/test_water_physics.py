@@ -144,7 +144,8 @@ def test_person_and_ring_float_without_thrust_or_rope():
     boat = Robot(position=(4, 0, .1))
     water = Water(waves=(), floating_bodies=[config.Names.HUMAN_BODY, config.Names.LIFEBUOY_BODY])
     world = build_world(parts=[water, boat, human, Lifebuoy(attached=True)])
-    for _ in range(2500):
+    # 구명환을 낀 사람은 3~5초에 한 번 크게 기울었다가 약 9초에 자리 잡는다 (2026-11-16 측정).
+    for _ in range(5000):
         advance(world)
     assert -.6 < world.data.xpos[human.body_id, 2] < .4
     assert np.linalg.norm(body_velocity_w(world.model, world.data, human.body_id)[0]) < .05

@@ -179,11 +179,12 @@ class WearDemo:
 
 
 # ─────────────────────────────────────────────────────────────
-# 배 ↔ 사람·구명환 충돌 시험 (tests/test_contact.py, sim/view_contact.py)
+# 배 ↔ 사람 충돌 시험 (tests/test_contact.py, sim/view_contact.py)
 # ─────────────────────────────────────────────────────────────
-CONTACT_SETTLE_SECONDS = 5.0   # 사람이 물에 자리 잡는 시간 (측정: 약 4초 뒤 속도 < 0.01 m/s)
-_FLOATING = (config.Names.HUMAN_BODY, config.Names.LIFEBUOY_BODY)
-_FREE_JOINTS = (config.Names.HUMAN_FREE, config.Names.LIFEBUOY_FREE)
+# 접근 단계의 사람은 아직 구명환이 없다 (구명환은 배에 실려 있다가 전달된다).
+CONTACT_SETTLE_SECONDS = 5.0   # 사람이 물에 자리 잡는 시간 (측정: 5초 뒤 속도 약 0.003 m/s)
+_FLOATING = (config.Names.HUMAN_BODY,)
+_FREE_JOINTS = (config.Names.HUMAN_FREE,)
 
 
 def _floating_human():
@@ -193,8 +194,7 @@ def _floating_human():
 @functools.lru_cache(maxsize=1)
 def _settled_pose():
     human = _floating_human()
-    world = build_world(parts=[Water(waves=(), include_boat=False, floating_bodies=list(_FLOATING)),
-                               human, Lifebuoy(attached=True)])
+    world = build_world(parts=[Water(waves=(), include_boat=False, floating_bodies=list(_FLOATING)), human])
     model, data = world.model, world.data
     for _ in range(round(CONTACT_SETTLE_SECONDS / model.opt.timestep)):
         advance_world(world)
@@ -204,9 +204,8 @@ def _settled_pose():
 
 
 def settled_victim_pose():
-    """배 없이 사람·고정 구명환만 잔잔한 물에 띄워 자리 잡은 자세 {자유 관절 이름: qpos 7개}.
+    """배 없이 구명환 없는 사람만 잔잔한 물에 띄워 자리 잡은 자세 {자유 관절 이름: qpos 7개}.
 
-    고정 연결 구명환은 자기 자유 관절을 가진 별도 body이고 weld로 사람에 붙어 있으므로 둘 다 저장한다.
     계산은 한 번만 하고 재사용한다.
     """
     return {name: np.array(qpos) for name, qpos in _settled_pose().items()}
@@ -219,9 +218,11 @@ def min_geom_distance(model, data, geoms_a, geoms_b, limit=5.0):
 
 
 class ContactDemo:
-    """자리 잡은 사람·구명환을 향해 배가 직진해 부딪히는 장면.
+    """물에 자리 잡은 사람(구명환 없음)을 향해 배가 직진해 부딪히는 장면.
 
-    heading_deg: 배가 달리는 방향 (0 = 발 쪽에서, 90 = 옆·구명환 쪽에서, 180 = 머리 쪽에서).
+    실제 흐름에서 배는 사람에게 닿지 않고 멈춰야 한다. 이 장면은 그 접근 제어가 실패했을 때의 최악 상황이다.
+
+    heading_deg: 배가 달리는 방향 (0 = 발 쪽에서, 90 = 옆에서, 180 = 머리 쪽에서).
     speed: 시작 순간 배 속도 [m/s]. thrust: 계속 내는 전진 명령 (0~1). gap: 출발 시 최소 형상 간격 [m].
     관통은 배 원점 위치가 아니라 형상 사이 부호 있는 거리로 판정한다. 옆에서 밀면 배가 마찰로
     회전해 사람 둘레를 닿은 채 돌아가는데, 이는 정상 물리다.
@@ -241,7 +242,7 @@ class ContactDemo:
                                      config.WaterParams.SURFACE_Z + config.Hull.HEIGHT / 2 - draft))
         self.human = _floating_human()
         water = Water(waves=(), floating_bodies=list(_FLOATING), surface_visual=surface_visual)
-        self.world = build_world(parts=[water, self.robot, self.human, Lifebuoy(attached=True)])
+        self.world = build_world(parts=[water, self.robot, self.human])
         model, data = self.world.model, self.world.data
 
         boat_q = model.jnt_qposadr[self.robot.joint_id]
@@ -254,11 +255,16 @@ class ContactDemo:
         self.boat_geoms = {g for g in range(model.ngeom) if model.geom_bodyid[g] == self.robot.body_id}
         self.victim_geoms = [g for g in range(model.ngeom) if model.geom_group[g] == config.Groups.PHYSICS
                              and model.geom_contype[g] and g not in self.boat_geoms]
-        for _ in range(5):   # 배를 진행 방향으로 옮겨 실제 최소 간격을 gap에 맞춘다
-            data.qpos[boat_q:boat_q + 3] += (self.gap() - gap) * self.direction
+        # 배를 진행 방향으로 옮겨 실제 최소 간격을 gap에 맞춘다. 다리처럼 비스듬히 물속으로 내려간
+        # 형상은 옮긴 만큼 간격이 줄지 않으므로 오차가 1mm 안이 될 때까지 반복한다.
+        for _ in range(50):
+            error = self.gap() - gap
+            if abs(error) < 1e-3:
+                break
+            data.qpos[boat_q:boat_q + 3] += error * self.direction
             mujoco.mj_forward(model, data)
         if abs(self.gap() - gap) > .01 or self.boat_contacts():
-            raise RuntimeError('배를 사람·구명환과 떨어진 출발 위치에 놓지 못했습니다.')
+            raise RuntimeError('배를 사람과 떨어진 출발 위치에 놓지 못했습니다.')
 
         boat_mass = model.body_subtreemass[self.robot.body_id]
         victim_mass = sum(model.body_subtreemass[model.body(name).id] for name in _FLOATING)

@@ -145,3 +145,31 @@ def test_thrust_saturation_preserves_requested_yaw_torque(force, torque):
     assert load[5] == pytest.approx(torque)
     if force == 0:
         assert load[0] == pytest.approx(0.)
+
+
+@pytest.mark.parametrize('start,yaw,target', [
+    ((6, 3), 0., (4, 2)),        # 목표가 거의 바로 뒤 (구조 접근 첫 구간과 같은 배치)
+    ((0, 0), 0., (0, 3)),        # 목표가 바로 옆
+    ((0, 0), math.pi / 2, (-4, -2)),
+])
+def test_approach_does_not_zigzag(start, yaw, target):
+    """접근 중 좌우 회전이 계속 뒤바뀌지 않는다 (보정 힘 방향을 쫓던 시절 32~50회)."""
+    manager = build_approach_demo(start=start, target=target, yaw=yaw)
+    world = manager.world
+    velocity = np.zeros(6)
+    flips, previous = 0, 0.
+    while world.data.time < 40 and manager.phase == Phase.APPROACH:
+        manager.step()
+        mujoco.mj_objectVelocity(world.model, world.data, mujoco.mjtObj.mjOBJ_BODY,
+                                 manager.robot.body_id, velocity, 0)
+        if abs(velocity[2]) > .05:  # 의미 있는 회전만 센다 [rad/s]
+            sign = math.copysign(1., velocity[2])
+            flips += previous not in (0., sign)
+            previous = sign
+    assert manager.phase != Phase.APPROACH, manager.readings()
+    assert flips <= 3, f'접근 중 회전 방향이 {flips}번 바뀜'
+
+
+def test_reverse_angles_need_a_gap():
+    with pytest.raises(ValueError):
+        ApproachSettings(reverse_enter_angle=math.radians(60), reverse_exit_angle=math.radians(60))

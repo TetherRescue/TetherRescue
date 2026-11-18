@@ -98,6 +98,8 @@ class Human:
         if (fractions.shape != (6,) or not np.isfinite(fractions).all()
                 or np.any(fractions <= 0) or not np.isclose(fractions.sum(), 1.0)):
             raise ValueError("Human.MASS_FRACTIONS는 합이 1인 양수 6개여야 합니다.")
+        arm_split = self._segment_fractions("ARM_SEGMENT_FRACTIONS")
+        leg_split = self._segment_fractions("LEG_SEGMENT_FRACTIONS")
         skin = [0.72, 0.48, 0.32, 1]
         shirt = [0.12, 0.39, 0.52, 1]
         trousers = [0.10, 0.14, 0.20, 1]
@@ -163,19 +165,19 @@ class Human:
             if self.articulated_arms:
                 self._build_arm(spec, body, side, shoulder, elbow, wrist, arm_mass, arm_name)
             else:
-                capsule(arm_name, [shoulder, elbow], cfg.ARM_RADIUS, arm_mass * .55, shirt)
+                capsule(arm_name, [shoulder, elbow], cfg.ARM_RADIUS, arm_mass * arm_split[0], shirt)
                 capsule(f"{prefix}_forearm_{side}", [elbow, wrist], cfg.ARM_RADIUS * .78,
-                        arm_mass * .40, skin)
+                        arm_mass * arm_split[1], skin)
                 ellipsoid(f"{prefix}_hand_{side}", wrist + [-.015, sign * .035, 0],
-                          [.037, .065, .022], arm_mass * .05, skin)
+                          [.037, .065, .022], arm_mass * arm_split[2], skin)
             hip, ankle = np.asarray(leg, dtype=float)
             knee = self._vector(getattr(cfg, f"KNEE_{side.upper()}_B"), "knee")
             leg_mass = mass * fractions[4 + index]
-            capsule(leg_name, [hip, knee], cfg.LEG_RADIUS, leg_mass * .57, trousers)
+            capsule(leg_name, [hip, knee], cfg.LEG_RADIUS, leg_mass * leg_split[0], trousers)
             capsule(f"{prefix}_shin_{side}", [knee, ankle], cfg.LEG_RADIUS * .70,
-                    leg_mass * .38, trousers)
+                    leg_mass * leg_split[1], trousers)
             ellipsoid(f"{prefix}_foot_{side}", ankle + [-.040, 0, .035],
-                      [.080, .045, .045], leg_mass * .05, shoes)
+                      [.080, .045, .045], leg_mass * leg_split[2], shoes)
         # 분절에 질량을 분배해 총 70kg 유지. articulated_arms 모드만 팔 관절을 추가한다.
 
     def _build_arm(self, spec, root, side, shoulder, elbow, wrist, mass, arm_name):
@@ -183,6 +185,7 @@ class Human:
         import mujoco
 
         names, cfg = config.Names, config.Human
+        arm_split = self._segment_fractions("ARM_SEGMENT_FRACTIONS")
         # 관절 팔의 0도는 실제 일직선이다. 고정 팔의 기존 형상은 유지한다.
         upper_vector = elbow - shoulder
         forearm_vector = upper_vector / np.linalg.norm(upper_vector) * np.linalg.norm(wrist - elbow)
@@ -217,16 +220,25 @@ class Human:
         prefix = names.HUMAN_DETAIL_PREFIX
         upper.add_geom(name=arm_name, type=mujoco.mjtGeom.mjGEOM_CAPSULE,
                        fromto=np.r_[np.zeros(3), elbow - shoulder], size=[cfg.ARM_RADIUS, 0, 0],
-                       mass=mass * .55, rgba=shirt, **self._geom_options())
+                       mass=mass * arm_split[0], rgba=shirt, **self._geom_options())
         forearm.add_geom(name=f"{prefix}_forearm_{side}", type=mujoco.mjtGeom.mjGEOM_CAPSULE,
                          fromto=np.r_[np.zeros(3), wrist - elbow], size=[cfg.ARM_RADIUS * .78, 0, 0],
-                         mass=mass * .4, rgba=skin, **self._geom_options())
+                         mass=mass * arm_split[1], rgba=skin, **self._geom_options())
         sign = 1 if side == 'l' else -1
         hand.add_geom(name=f"{prefix}_hand_{side}", type=mujoco.mjtGeom.mjGEOM_ELLIPSOID,
                       pos=[-.015, sign * .035, 0], size=[.037, .065, .022],
-                      mass=mass * .05, rgba=skin, **self._geom_options())
+                      mass=mass * arm_split[2], rgba=skin, **self._geom_options())
         grip_name = names.HUMAN_GRIP_L_SITE if side == 'l' else names.HUMAN_GRIP_R_SITE
         hand.add_site(name=grip_name, pos=[.022, sign * .035, 0], size=[.014, 0, 0], rgba=[.2, 1, .3, 1])
+
+    @staticmethod
+    def _segment_fractions(name):
+        """팔·다리 안쪽 세 분절의 질량 비율 (합 1인 양수 3개)."""
+        fractions = np.asarray(getattr(config.Human, name), dtype=float)
+        if (fractions.shape != (3,) or not np.isfinite(fractions).all()
+                or np.any(fractions <= 0) or not np.isclose(fractions.sum(), 1.0)):
+            raise ValueError(f"Human.{name}는 합이 1인 양수 3개여야 합니다.")
+        return fractions
 
     @staticmethod
     def _vector(value, name):

@@ -2,6 +2,8 @@
 
 실행: python -m sim.view_tether [--headless]
 물·실제 선체·연결 단계 전환·끊김은 이 독립 데모에 포함하지 않는다.
+구명환을 이미 착용했다고 가정하고 견인 단계만 떼어 본 시험이다.
+실제 흐름(배가 구명환을 건네줌 → 사람이 받거나 착용 → 견인)은 view_grasp·view_wear와 단계 연결에서 다룬다.
 """
 
 import argparse
@@ -116,7 +118,7 @@ class PullComparison:
                   "HELD": "2 / RESET TO STRETCHED SETUP - paused before release",
                   "RELEASED": "3 / RELEASED - watch the person follow"}
         return (mujoco.mjtFontScale.mjFONTSCALE_150, mujoco.mjtGridPos.mjGRID_TOPLEFT,
-                "TETHER TEST (gravity OFF)\n" + titles[self.phase] + "\n\n"
+                "TETHER TEST (gravity OFF, ring already worn)\n" + titles[self.phase] + "\n\n"
                 "Endpoint gap\nRope / rest length\nSlack (extra rope)\nExtension\nTension\nPerson movement\n\n"
                 "Gray: slack | Orange: pulling\nRed arrow: force (scaled)\nBlue line: initial position",
                 "\n\n\n"
