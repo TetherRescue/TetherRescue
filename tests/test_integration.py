@@ -1,4 +1,7 @@
-"""움직이는 배·로프·구명환·사람의 무중력 힘 전달 시험 (수상 시험은 test_water_physics)."""
+"""기본 세계 조립과 배·로프·구명환·사람의 무중력 힘 전달 시험.
+
+수상 견인·정착 시험은 test_water_physics에서 실행한다.
+"""
 import numpy as np
 import pytest
 
@@ -6,6 +9,18 @@ mujoco = pytest.importorskip('mujoco')
 
 from sim.view_towing import advance, build_towing_world
 from sim.frames import body_velocity_w
+
+
+def test_default_assembly_runs_thousand_steps_without_warning():
+    from sim.world import advance_world, build_world
+
+    world = build_world()
+    for _ in range(1000):
+        advance_world(world)
+        for state in (world.data.qpos, world.data.qvel, world.data.qacc):
+            assert np.isfinite(state).all()
+        assert not world.data.warning.number.any()
+    assert world.data.time == pytest.approx(1000 * world.model.opt.timestep)
 
 
 def test_boat_tows_human_for_thousand_steps_without_reset():
