@@ -319,7 +319,7 @@ class Physics:
 # ─────────────────────────────────────────────────────────────
 # 물 밀도와 중력은 여기서 따로 만들지 않고 Physics.RHO_WATER, Physics.GRAVITY 를 쓴다.
 # (같은 값을 두 곳에 적으면 한쪽만 바뀌는 사고가 나기 쉬움)
-# 이름이 WaterParams 인 이유: sim/water.py 의 Water(물 모듈 본체)와 헷갈리지 않게.
+# 이름이 WaterParams 인 이유: sim/water/water.py 의 Water(물 모듈 본체)와 헷갈리지 않게.
 #   config.WaterParams = 물의 "설정값 묶음", water.Water = 그 값을 읽어 실제로 힘을 계산하는 모듈.
 class WaterParams:
     # 파도가 없을 때 수면의 높이 [m]. 월드 z=0 이 수면.                     [미현 / 제안]
@@ -385,7 +385,7 @@ class WaterParams:
     # 왜 기본값이 꺼져 있나 (False)
     #   1) 아래 계수가 아직 확정값이 아니다 (surge 는 근거 미확인, sway 는 자료 범위 밖으로 추정한 값).
     #   2) 켜면 모든 시뮬레이션의 배 가속이 바뀐다 → 로봇(동경)·견인(가영) 테스트 결과가 달라질 수 있다.
-    #   → 구현과 테스트(tests/test_water.py 7번, 켠 상태로 검사)는 되어 있다.
+    #   → 구현과 테스트(tests/water/test_water.py 7번, 켠 상태로 검사)는 되어 있다.
     #     켤지는 계수 근거를 확인한 뒤 팀 회의에서 정한다. 켤 때는 동경·가영 태그.            [미현 / 제안]
     ADDED_MASS_ENABLED = False
     # 계수 = 배 질량 대비 비율 (떠 있는 배는 배 질량 = 밀어낸 물 질량). 순서 (surge 앞뒤, sway 좌우, heave 위아래)
@@ -447,7 +447,7 @@ class Owner:
     # 이유: 계산식이 물 코드에 있으니 계수도 같은 곳에서 관리.
     # ⚠️ 회전 저항(ROT_DRAG_*)이 PoC 보다 수십 배 작음 (PoC 롤 300·피치 600 vs 8·8) — 흔들림 테스트로 확인할 것
     #    → 반영: roll·pitch 를 감쇠비(WaterParams.ROT_DAMPING_RATIO = 0.3)로 바꿈. 계산값 롤 약 124·피치 약 708.
-    #      흔들림이 멎는지는 tests/test_water.py 에서 확인 (미현)
+    #      흔들림이 멎는지는 tests/water/test_water.py 에서 확인 (미현)
     DRAG_COEFFS = WATER
 
 
@@ -706,7 +706,7 @@ class Capsize:
     #       그보다 조금 앞인 90° 로 둠 → 이 각도를 넘으면 스스로 못 돌아온다고 봄.
     #       참고: 최대 GZ 는 roll 약 17 cm·pitch 약 48 cm (20~25°), 60° 에서도 roll GZ 약 12 cm 로 아직 강하게 일어섬.
     #       선체는 물이 안 들어오는 상자라 실제 배보다 낙관적 (갑판이 잠기는 roll 약 53° 이후 침수 없음).
-    #       검증: tests/test_robot.py test_capsize_limit_below_vanishing_stability
+    #       검증: tests/robot/test_robot.py test_capsize_limit_below_vanishing_stability
     ROLL_LIMIT = math.radians(90)    # [동경 / 제안]
     PITCH_LIMIT = math.radians(90)   # [동경 / 제안]
     # 무엇: 전복 판정 후 무엇을 할지. 후보: 에피소드 종료 / 안전 모드 (태수와 합의)
