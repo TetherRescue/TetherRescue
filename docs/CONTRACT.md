@@ -416,7 +416,22 @@
   `hull_leg_l/r`·`hull_bridge`·`hull_bow`를 PHYSICS 그룹·`Contacts.BOAT`로 만듭니다.
 - 껍데기 무게중심은 모양 중심(x ≈ +0.19m)이며, 부품 배치로 배 무게중심도 x ≈ +0.19m에 맞춰 수평으로 뜹니다.
 - 줄 묶는 점 `Hull.TOW_POINT_B = (0.15, 0, 0.1)` = 홈 앞끝 가운데. 추진기 y ±0.525m(다리 가운데).
-- 구명환은 지금처럼 줄로 뒤에 끌고 갑니다. 홈에 고정해 싣는 것(발사대)은 다음 단계입니다.
+- 구명환은 아래 발사 시나리오에서 홈 위 발사대에 실립니다. 기존 `RescueMission`은 착용 구명환 그대로입니다.
+
+## 구명환 발사 (2026-11-19)
+
+- `sim/robot/launcher.py` `Launcher`(로봇): build 때 구명환 시작 자리를 배 기준 `Launcher.MOUNT_B`·`MOUNT_QUAT_B`로
+  바꾸고, 배 ↔ 구명환 weld `Names.LAUNCHER_MOUNT_EQ`(처음 켜짐)를 만듭니다. `Lifebuoy(attached=False)`가 필요합니다.
+- `aim(data, target_w)`: 공기 저항 없는 포물선(앙각 `Launcher.ANGLE_DEG`)으로, 구명환 잡는 점이 목표에 떨어지는
+  환 중심 속도를 구합니다. `fire()`: weld를 끄고 `PUSH_SECONDS` 동안 일정한 힘을 `acc`로 환에, 반동을 배의
+  발사대 점에 겁니다. qpos·qvel을 직접 바꾸지 않습니다.
+- `Robot(winch=True).release_winch(length)`: 줄 기준 길이를 바로 늘리고 `delivery_ready`를 켭니다. 감지는 않습니다.
+- `Robot(yaw=...)`: 처음 방향. 배 기준으로 놓이는 부품(발사대)을 위해 build 때 몸체 자세로 넣습니다.
+- `RescueApproach(target_site=..., victim_bodies=...)`: 다가갈 기준 site와 간격 검사 대상을 바꿀 수 있습니다.
+  기본값은 이전과 같습니다(구명환 로프 점, 사람·구명환).
+- `sim/world/launch_mission.py` `LaunchMission`: APPROACH → LAUNCH → GRAB → TOW → COMPLETE.
+  LAUNCH·GRAB은 Watchdog의 `ATTACH` 시간 제한(기본 20초)을 씁니다. 빗나가 못 잡으면 시간 초과로 멈춥니다(재발사 없음).
+  잡기는 `HumanGrasp`(reach 0.45m, 상대 속력 0.25m/s) 고정 잡기 근사입니다.
 
 ## 최신 main 선체 통합 (2026-11-13)
 
