@@ -11,7 +11,7 @@ from sim import config
 from sim.world.rescue_mission import MissionStage
 from sim.robot.robot import Robot
 from sim.world.view_rescue import build_rescue_mission, apply_failure_demo, run_headless, decorate_rescue
-from sim.world.watchdog import FailureCode, MissionWatchdog, WatchdogSettings
+from sim.world.watchdog import FailureCode, InferenceWatchdog, InferenceWatchdogSettings, MissionWatchdog, WatchdogSettings
 from sim.world.world import build_world
 
 
@@ -61,7 +61,8 @@ def test_orientation_is_checked_from_qpos_before_forward(roll, pitch, yaw, expec
 @pytest.mark.parametrize('kind,code', [('timeout', FailureCode.STAGE_TIMEOUT),
                                       ('capsize', FailureCode.CAPSIZE),
                                       ('nonfinite', FailureCode.INVALID_STATE),
-                                      ('warning', FailureCode.ENGINE_WARNING)])
+                                      ('warning', FailureCode.ENGINE_WARNING),
+                                      ('inference', FailureCode.INFERENCE_TIMEOUT)])
 def test_injected_failure_latches_zero_commands_and_freezes_physics(kind, code):
     mission = build_rescue_mission()
     apply_failure_demo(mission, kind)
@@ -184,6 +185,77 @@ def test_invalid_watchdog_settings_are_rejected(options):
         WatchdogSettings(**options)
 
 
+def test_idle_inference_watch_does_not_read_the_clock():
+    calls = []
+    watchdog = InferenceWatchdog(clock=lambda: calls.append(1) or 0.0)
+    assert watchdog.check() is None and watchdog.command is None and calls == []
+    mission = build_rescue_mission(inference_clock=lambda: calls.append(1) or 0.0)
+    assert mission.step() is True and calls == []
+
+
+def test_inference_response_within_limit_keeps_the_mission_running():
+    watchdog = InferenceWatchdog(InferenceWatchdogSettings(response_timeout=0.5))
+    assert watchdog.request(now=0.0) is None
+    assert watchdog.respond(now=0.49) is None
+    assert not watchdog.safe_mode
+    stalled = InferenceWatchdog(InferenceWatchdogSettings(response_timeout=0.5))
+    stalled.request(now=0.0)
+    stalled.request(now=0.4)  # 재요청은 최초 시각을 늘리지 않는다.
+    assert stalled.check(now=0.5) is not None
+    mission = build_rescue_mission()
+    mission.request_inference(now=0.0)
+    assert mission.receive_inference(now=0.1) is True
+    assert mission.step() is True and not mission.failed
+
+
+def test_missing_inference_response_latches_zero_command_until_reset():
+    watchdog = InferenceWatchdog(InferenceWatchdogSettings(response_timeout=0.5))
+    robot = Robot()
+    robot.set_command(1, .2)
+    watchdog.request(now=0.0)
+    failure = watchdog.check(now=0.5)
+    assert failure is watchdog.respond(now=0.8) is watchdog.request(now=1.0)
+    assert failure.code == FailureCode.INFERENCE_TIMEOUT and failure.stage == 'INFERENCE'
+    assert watchdog.safe_mode and watchdog.command == (0.0, 0.0)
+    assert watchdog.apply(robot) is True
+    assert robot.throttle == 0 and robot.steer == 0
+    assert '0.5s wall time' in failure.message
+    watchdog.reset()
+    assert watchdog.failure is None and watchdog.check(now=2.0) is None
+
+    mission = build_rescue_mission()
+    mission.robot.set_command(1, .2)
+    mission.rope.attach(mission.world.model)
+    mission.request_inference(now=0.0)
+    assert mission.receive_inference(now=0.5) is False
+    assert mission.failed and mission.stage == MissionStage.FAILED
+    assert mission.failure.code == FailureCode.INFERENCE_TIMEOUT and mission.failure.stage == 'APPROACH'
+    assert mission.failure.time == pytest.approx(0)
+    assert mission.rope.attached
+    np.testing.assert_array_equal(mission.robot._commands, 0)
+    np.testing.assert_array_equal(mission.world.data.xfrc_applied, 0)
+    frozen = mission.world.data.time
+    assert mission.step() is False and mission.world.data.time == frozen
+    mujoco.mj_resetData(mission.world.model, mission.world.data)
+    mission.reset()
+    assert not mission.failed and mission.inference.failure is None
+    assert mission.step() is True
+
+
+@pytest.mark.parametrize('options', [dict(response_timeout=0), dict(response_timeout=float('nan'))])
+def test_invalid_inference_settings_and_timestamps_are_rejected(options):
+    with pytest.raises(ValueError):
+        InferenceWatchdogSettings(**options)
+    watchdog = InferenceWatchdog()
+    with pytest.raises(ValueError, match='요청 없이'):
+        watchdog.respond(now=0.0)
+    watchdog.request(now=1.0)
+    with pytest.raises(ValueError, match='역행'):
+        watchdog.check(now=0.5)
+    with pytest.raises(ValueError, match='유한'):
+        InferenceWatchdog().request(now=float('nan'))
+
+
 def test_nonfinite_time_is_reported_with_last_finite_failure_timestamp():
     mission = build_rescue_mission()
     mission.world.data.time = float('nan')
@@ -195,7 +267,8 @@ def test_nonfinite_time_is_reported_with_last_finite_failure_timestamp():
 
 
 @pytest.mark.parametrize('kind,code', [('timeout', 'STAGE_TIMEOUT'), ('capsize', 'CAPSIZE'),
-                                      ('nonfinite', 'INVALID_STATE'), ('warning', 'ENGINE_WARNING')])
+                                      ('nonfinite', 'INVALID_STATE'), ('warning', 'ENGINE_WARNING'),
+                                      ('inference', 'INFERENCE_TIMEOUT')])
 def test_headless_cli_reports_failure_and_exits_nonzero(kind, code):
     import subprocess
     import sys

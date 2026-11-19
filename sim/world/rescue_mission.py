@@ -9,7 +9,7 @@ import numpy as np
 from sim import config
 from sim.frames import body_velocity_w
 from sim.robot.rescue_approach import RescueApproach, RescueStage
-from sim.world.watchdog import MissionWatchdog, FailureCode
+from sim.world.watchdog import FailureCode, InferenceWatchdog, MissionWatchdog
 
 
 class MissionStage(str, Enum):
@@ -36,7 +36,8 @@ class RescueMissionSettings:
 
 
 class RescueMission:
-    def __init__(self, world, robot, rope, *, tow_heading=0., settings=None, approach_settings=None, watchdog_settings=None):
+    def __init__(self, world, robot, rope, *, tow_heading=0., settings=None, approach_settings=None,
+                 watchdog_settings=None, inference_settings=None, inference_clock=None):
         if (rope not in world.parts or not rope.enabled or rope.tendon_id is None
                 or rope.attached or rope.initially_attached):
             raise ValueError('처음부터 미연결인 tendon을 생성·bind해 전달하세요.')
@@ -55,6 +56,7 @@ class RescueMission:
         self._last_time = float(world.data.time)
         self.watchdog = MissionWatchdog(watchdog_settings)
         self.watchdog.reset(world.data.time, self.stage.value)
+        self.inference = InferenceWatchdog(inference_settings, clock=inference_clock)
         self._failure_display = None
         self._save_valid_state()
 
@@ -102,6 +104,7 @@ class RescueMission:
         self._complete_since = None
         self._last_time = float(self.world.data.time)
         self.watchdog.reset(self.world.data.time, self.stage.value)
+        self.inference.reset()
         self._failure_display = None
         self._save_valid_state()
 
@@ -149,7 +152,7 @@ class RescueMission:
         self.world.acc.apply(self.world.model, self.world.data)
         # 수치 오류가 난 실제 data를 렌더러에 전달하지 않는다.
         if self.failure.code in (FailureCode.CAPSIZE, FailureCode.STAGE_TIMEOUT,
-                                 FailureCode.MISSION_TIMEOUT):
+                                 FailureCode.MISSION_TIMEOUT, FailureCode.INFERENCE_TIMEOUT):
             data = self.world.data
             pose = (data.qpos, data.act, data.time)
         else:
@@ -174,6 +177,8 @@ class RescueMission:
                 and world.data.time == 0 and np.array_equal(world.data.qpos, world.model.qpos0)
                 and MissionWatchdog.invalid_state(world.data) is None):
             self.reset()
+        if self.inference.check():
+            return self._stop_for_inference()
         if self.watchdog.check(world.model, world.data, self.robot.body_id, self.stage.value):
             return self._stop()
         try:
@@ -236,3 +241,26 @@ class RescueMission:
                 if self.stage == MissionStage.COMPLETE:
                     self.stage = MissionStage.TOW
         self._last_time = float(world.data.time)
+
+    def request_inference(self, now=None):
+        """정책 추론을 요청한 실제 시각을 기록한다. 이미 실패했으면 그 기록을 유지한다."""
+        if self.failed:
+            self.robot.set_command(0, 0)
+            return self.failure
+        return self.inference.request(now)
+
+    def receive_inference(self, now=None):
+        """응답을 기록한다. 제한 시간을 넘기면 안전 모드로 멈추고 False를 반환한다."""
+        if self.failed:
+            self.robot.set_command(0, 0)
+            return False
+        self.inference.respond(now)
+        if self.inference.failure is not None:
+            self._stop_for_inference()
+            return False
+        return True
+
+    def _stop_for_inference(self):
+        late = self.inference.failure
+        self.watchdog.trip(FailureCode.INFERENCE_TIMEOUT, self.world.data.time, self.stage.value, late.message)
+        return self._stop()
