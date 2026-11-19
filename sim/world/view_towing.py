@@ -38,7 +38,7 @@ def build_surface_towing_world():
     height = config.WaterParams.SURFACE_Z + config.Hull.HEIGHT / 2 - config.Expect.DRAFT
     # 초기 줄은 느슨하다. 배가 이동해 줄을 팽팽하게 만드는 과정부터 관찰한다.
     ring_end_x = config.Lifebuoy.POSITION_IN_HUMAN_B[0] + config.Lifebuoy.TOW_POINT_B[0]
-    boat_x = ring_end_x + .9 * config.Tether.REST_LENGTH + config.Hull.LENGTH / 2
+    boat_x = ring_end_x + .9 * config.Tether.REST_LENGTH - config.Hull.TOW_POINT_B[0]   # 줄 묶는 점 기준
     robot = Robot(position=(boat_x, 0, height),
                   tow_point_b=config.Hull.TOW_POINT_B)
     human = Human(position=(0, -config.Lifebuoy.TOW_POINT_B[1], -.03 + config.WaterParams.SURFACE_Z))

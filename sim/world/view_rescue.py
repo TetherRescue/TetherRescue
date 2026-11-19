@@ -28,7 +28,7 @@ def _build_rescue_world(*, start, victim, yaw, tow_heading, rope):
     if (start.shape != (2,) or victim.shape != (2,) or not np.isfinite(start).all()
             or not np.isfinite(victim).all() or not math.isfinite(yaw) or not math.isfinite(tow_heading)):
         raise ValueError('출발·사람 위치와 방향은 유한한 값이어야 합니다.')
-    draft = config.Hull.MASS / (config.Physics.RHO_WATER * config.Hull.LENGTH * config.Hull.BEAM)
+    draft = config.Expect.DRAFT
     robot = Robot(position=(*start, config.WaterParams.SURFACE_Z + config.Hull.HEIGHT / 2 - draft),
                   tow_point_b=config.Hull.TOW_POINT_B)
     human = Human(position=(*victim, config.WaterParams.SURFACE_Z - .03))
