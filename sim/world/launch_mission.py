@@ -18,6 +18,7 @@ import numpy as np
 from sim import config
 from sim.frames import body_velocity_w
 from sim.robot.launcher import Launcher, LOADED
+from sim.robot.phase_manager import ApproachSettings
 from sim.robot.rescue_approach import RescueApproach, RescueApproachSettings, RescueStage
 from sim.world.rescue_mission import RescueMissionSettings
 from sim.world.watchdog import FailureCode, MissionWatchdog, WatchdogSettings
@@ -46,6 +47,13 @@ class LaunchSettings:
     grab_relative_speed: float = .25
     # 물에 닿았다고 보는 환 중심 높이 (수면 위) [m]
     landing_height: float = .06
+    # 발사 자리에 멈추는 허용 오차. 발사대가 손을 향해 다시 겨누므로 5 cm 정밀 정지가 필요 없다.
+    # 이유 (2026-11-19 측정): 5 cm·8°·1 초 유지로는 정렬에만 14~19 초. 아래 값으로 발사 12~26 초, 착수 오차 그대로
+    # [실험값 — 11/23 회의에서 확정]
+    stop_radius: float = .3
+    stop_tolerance: float = .4
+    stop_heading_deg: float = 15.
+    stop_hold_seconds: float = .2
 
     def __post_init__(self):
         for value in vars(self).values():
@@ -63,12 +71,21 @@ class LaunchMission:
         if rope not in world.parts or not rope.attached or launcher not in world.parts:
             raise ValueError('발사 시나리오의 로프는 처음부터 연결, 발사대는 조립되어 있어야 합니다.')
         self.world, self.robot, self.launcher, self.grasp, self.rope = world, robot, launcher, grasp, rope
-        self.settings = RescueMissionSettings(tow_distance=10.) if settings is None else settings
+        # 견인 속도 상한 0.4 → 0.7 m/s (2026-11-19 측정: 사람 실제 속도 최고 0.23 m/s, 최대 장력 158 N,
+        # 머리 높이 변화는 0.4 와 0.3 cm 차이). 1.0 이면 장력 221 N. [실험값 — 11/23 회의에서 확정]
+        self.settings = RescueMissionSettings(tow_distance=10., tow_speed=.7) if settings is None else settings
         self.launch = LaunchSettings() if launch is None else launch
+        launch_nav = self.launch
+        navigation = replace(ApproachSettings(), capture_radius=launch_nav.stop_radius,
+                             position_tolerance=launch_nav.stop_tolerance,
+                             reapproach_radius=launch_nav.stop_tolerance + .3,
+                             heading_tolerance=math.radians(launch_nav.stop_heading_deg),
+                             speed_tolerance=.1, yaw_speed_tolerance=.1,
+                             arrival_hold_seconds=launch_nav.stop_hold_seconds)
         approach = RescueApproachSettings(staging_gap=config.Launcher.STAGING_GAP,
                                           connection_gap=config.Launcher.STAGING_GAP - 1.)
         # 환은 배에 실려 있으므로 다가갈 기준은 사람 손, 선체 간격 검사 대상은 사람만
-        self.approach = RescueApproach(world, robot, tow_heading=tow_heading, settings=approach,
+        self.approach = RescueApproach(world, robot, tow_heading=tow_heading, settings=approach, navigation=navigation,
                                        target_site=grasp.hand_name, victim_bodies=(config.Names.HUMAN_BODY,))
         self.controller = self.approach.controller
         self.human_body = world.model.body(config.Names.HUMAN_BODY).id
@@ -284,6 +301,6 @@ def build_launch_mission(*, start=(8., 3.), victim=(0., 0.), yaw=0., tow_heading
     launcher = Launcher(ring_site=grasp.ring_name)
     world = build_world(parts=[water, robot, human, ring, rope, grasp, launcher])
     mujoco.mj_forward(world.model, world.data)
-    settings = RescueMissionSettings(tow_distance=tow_distance)
+    settings = RescueMissionSettings(tow_distance=tow_distance, tow_speed=.7)
     return LaunchMission(world, robot, launcher, grasp, rope, tow_heading=tow_heading, settings=settings,
                          launch=launch, watchdog_settings=watchdog_settings)
