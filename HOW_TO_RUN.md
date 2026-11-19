@@ -43,13 +43,13 @@ MuJoCo가 설치된 가상환경에서 실행합니다. 화면을 띄우지 않�
 
 ```bash
 source .venv/bin/activate
-python -m pytest tests/test_world.py tests/test_forces.py -q
+python -m pytest tests/world/test_world.py tests/test_forces.py -q
 ```
 
 조립 함수만 사용하려면:
 
 ```python
-from sim.world import build_world
+from sim.world.world import build_world
 
 # 회의에서 확정한 config 값(dt=0.002초, 중력=9.81, implicitfast)을 사용합니다.
 world = build_world()
@@ -67,8 +67,8 @@ print(world.model.nbody, world.data.time)
 기존 상자 시험 모드로 크기·질량을 확인하려면:
 
 ```python
-from sim.human import Human
-from sim.world import build_world
+from sim.world.human import Human
+from sim.world.world import build_world
 
 human = Human(position=(0, 0, 1), shape="box")  # 기본 형상은 humanoid
 world = build_world(parts=[human])
@@ -85,7 +85,7 @@ print(world.model.geom_size[human.geom_id])  # 반길이: [0.85, 0.2, 0.1]
 
 ```bash
 source .venv/bin/activate
-python -m sim.view_human
+python -m sim.world.view_human
 ```
 
 어깨·허리 윤곽이 있는 몸통, 타원형 머리와 얼굴, 팔꿈치·무릎·손발을 가진 사람과 주황·흰색 구명환이 함께 떨어집니다.
@@ -93,10 +93,10 @@ python -m sim.view_human
 약 1초마다 시작 위치로 돌아와 반복합니다. 모든 부위와 구명환은 고정 연결되어 있습니다.
 이 자유낙하 데모에서는 부력을 적용하지 않습니다. 팔 관절 운동과 접촉으로 몸을 지지하는 기능은 아직 없습니다.
 창을 닫으면 종료합니다. 이는 독립 데모의 반복 동작이며 실제 구조 시나리오의 리셋 정책이 아닙니다.
-렌더러가 EGL로 설정되어 창이 열리지 않으면 `MUJOCO_GL=glfw python -m sim.view_human`을 사용합니다.
-화면이 없는 환경에서는 `python -m sim.view_human --headless`로 데모의 계산만 확인할 수 있습니다.
-기존 사람만 보려면 `python -m sim.view_human --human-only`로 실행합니다.
-구명환 검증만 실행하려면 `python -m pytest tests/test_lifebuoy.py -v`를 사용합니다.
+렌더러가 EGL로 설정되어 창이 열리지 않으면 `MUJOCO_GL=glfw python -m sim.world.view_human`을 사용합니다.
+화면이 없는 환경에서는 `python -m sim.world.view_human --headless`로 데모의 계산만 확인할 수 있습니다.
+기존 사람만 보려면 `python -m sim.world.view_human --human-only`로 실행합니다.
+구명환 검증만 실행하려면 `python -m pytest tests/world/test_lifebuoy.py -v`를 사용합니다.
 
 ## 로프 견인 시험 보기
 
@@ -104,7 +104,7 @@ python -m sim.view_human
 
 ```bash
 source .venv/bin/activate
-python -m sim.view_tether
+python -m sim.world.view_tether
 ```
 
 기본 시연은 중력을 끈 로프 단독 비교 실험입니다. 공유 config의 중력값은 바꾸지 않습니다.
@@ -124,26 +124,26 @@ HUD는 MuJoCo 글꼴 호환을 위해 영문으로 표시합니다. 부력이나
 곡선은 표시하는 64개 구간 길이의 합을 기준 길이에 맞춥니다.
 두 끝점 거리가 기준 길이 이상이면 탄성으로 늘어난 직선으로 표시합니다.
 이 곡선은 물리적 처짐·접촉을 계산하는 로프가 아니라 화면용 중심선입니다.
-기존 중력 낙하 시연은 `python -m sim.view_tether --pendulum`로 실행합니다.
+기존 중력 낙하 시연은 `python -m sim.world.view_tether --pendulum`로 실행합니다.
 
 ```bash
-python -m sim.view_tether --headless
-python -m pytest tests/test_tether.py -v
+python -m sim.world.view_tether --headless
+python -m pytest tests/world/test_tether.py -v
 ```
 
 단위 검사는 느슨함·늘어남·빠른 단축·양쪽 작용반작용을 엔진의 실제 가속도로 확인합니다.
 통합 검사는 리셋 없이 사람·구명환 견인을 연속 1,000스텝 실행합니다.
 추가 비교 검사는 느슨한 상태의 정지와 늘어난 로프를 놓은 뒤 이동을 확인합니다.
-`python -m pytest tests/test_rope_visual.py -v`는 끝점 일치·표시 길이 보존·실제 표시 구간 길이를 검증합니다.
+`python -m pytest tests/world/test_rope_visual.py -v`는 끝점 일치·표시 길이 보존·실제 표시 구간 길이를 검증합니다.
 
 ## 물 위에서 배가 사람을 견인하는 시험
 
 > 이 시험은 구명환을 이미 착용했다고 가정하고 견인 단계만 떼어 본 것입니다. 실제 흐름은 배가 줄+구명환을 건네주고 사람이 받거나 착용한 뒤 견인합니다.
 
 ```bash
-python -m sim.view_towing
-python -m sim.view_towing --headless
-python -m pytest tests/test_water_physics.py tests/test_buoyancy.py -q
+python -m sim.world.view_towing
+python -m sim.world.view_towing --headless
+python -m pytest tests/water/test_water_physics.py tests/water/test_buoyancy.py -q
 ```
 
 기본 시연은 중력·부력·물 저항이 켜진 잔잔한 물의 견인 시험입니다.
@@ -169,8 +169,8 @@ headless는 10초(5,000스텝)를 리셋 없이 실행합니다.
 기존 무중력 힘 전달 시험은 다음 명령으로 실행합니다.
 
 ```bash
-python -m sim.view_towing --dry
-python -m sim.view_towing --dry --headless
+python -m sim.world.view_towing --dry
+python -m sim.world.view_towing --dry --headless
 ```
 
 이 모드는 초기 로프가 약 2.38m로 늘어난 배치에서 시작하고, 중력·부력·물 저항을 끕니다.
@@ -185,10 +185,10 @@ GUI는 2초를 반복하며 headless는 리셋 없이 1,000스텝을 실행합�
 ## 목표 위치에 접근하고 멈추기
 
 ```bash
-python -m sim.view_approach
-python -m sim.view_approach --headless
-python -m sim.view_approach --start 6 3 --yaw 180 --target 0 0 --heading 90
-python -m pytest tests/test_phase.py -q
+python -m sim.world.view_approach
+python -m sim.world.view_approach --headless
+python -m sim.world.view_approach --start 6 3 --yaw 180 --target 0 0 --heading 90
+python -m pytest tests/robot/test_phase.py -q
 ```
 
 기본 목표는 월드 `(4, 2)`m, 도착 방향은 +x(0도)입니다.
@@ -216,11 +216,11 @@ GUI는 리셋 없이 계속 실행하며 창을 닫으면 종료합니다.
 ## 구명환의 연결 위치로 접근하기
 
 ```bash
-python -m sim.view_rescue --approach-only
-python -m sim.view_rescue --approach-only --headless
-python -m sim.view_rescue --approach-only --start -6 0 --yaw 0
-python -m sim.view_rescue --approach-only --start 5 6 --yaw 180 --heading 90
-python -m pytest tests/test_rescue_approach.py -q
+python -m sim.world.view_rescue --approach-only
+python -m sim.world.view_rescue --approach-only --headless
+python -m sim.world.view_rescue --approach-only --start -6 0 --yaw 0
+python -m sim.world.view_rescue --approach-only --start 5 6 --yaw 180 --heading 90
+python -m pytest tests/robot/test_rescue_approach.py -q
 ```
 
 배와 실제 부유하는 사람·구명환을 함께 조립하고 **로프 없이** 연결 대기 위치에 접근합니다.
@@ -250,11 +250,11 @@ CLI 각도는 도, `build_rescue_demo`·`RescueApproach` API 각도는 rad입니
 ## 접근 → 로프 연결 → 견인 → 정지 전체 시나리오
 
 ```bash
-python -m sim.view_rescue
-python -m sim.view_rescue --headless
-python -m sim.view_rescue --start 5 6 --yaw 180 --heading 90
-python -m sim.view_rescue --tow-distance 8
-python -m pytest tests/test_tether.py tests/test_rescue_mission.py -q
+python -m sim.world.view_rescue
+python -m sim.world.view_rescue --headless
+python -m sim.world.view_rescue --start 5 6 --yaw 180 --heading 90
+python -m sim.world.view_rescue --tow-distance 8
+python -m pytest tests/world/test_tether.py tests/world/test_rescue_mission.py -q
 ```
 
 이제 `view_rescue` 기본 실행은 전체 시나리오입니다. 기존 연결 대기 시험은 `--approach-only`로 선택합니다.
@@ -285,14 +285,14 @@ HUD에 연결 여부·장력·사람 진행 거리를 표시합니다. 로프는
 전체 시나리오에는 Watchdog가 기본 적용됩니다.
 
 ```bash
-python -m sim.view_rescue
-python -m sim.view_rescue --headless
+python -m sim.world.view_rescue
+python -m sim.world.view_rescue --headless
 # 명시적으로 오류를 주입해 중단을 확인하는 시연
-python -m sim.view_rescue --failure-demo capsize
-python -m sim.view_rescue --headless --failure-demo timeout
-python -m sim.view_rescue --headless --failure-demo nonfinite
-python -m sim.view_rescue --headless --failure-demo warning
-python -m pytest tests/test_watchdog.py -q
+python -m sim.world.view_rescue --failure-demo capsize
+python -m sim.world.view_rescue --headless --failure-demo timeout
+python -m sim.world.view_rescue --headless --failure-demo nonfinite
+python -m sim.world.view_rescue --headless --failure-demo warning
+python -m pytest tests/world/test_watchdog.py -q
 ```
 
 `--failure-demo`는 시험을 위해 오류를 만드는 옵션입니다. 정상 실행에서는 오류를 주입하지 않습니다.
@@ -316,8 +316,8 @@ headless의 `--timeout`은 추가 상한입니다. 더 크게 지정해도 Watch
 필요하면 Python API로 기준을 전달할 수 있습니다.
 
 ```python
-from sim.view_rescue import build_rescue_mission
-from sim.watchdog import WatchdogSettings
+from sim.world.view_rescue import build_rescue_mission
+from sim.world.watchdog import WatchdogSettings
 
 mission = build_rescue_mission(
     watchdog_settings=WatchdogSettings(approach_timeout=180, tow_timeout=120),
@@ -349,15 +349,15 @@ mission.reset()
 
 ```bash
 source .venv/bin/activate
-python -m sim.view_grasp
-python -m sim.view_grasp --headless
+python -m sim.world.view_grasp
+python -m sim.world.view_grasp --headless
 # 전달 신호가 없으면 로프가 사람을 직접 당기지 않는 비교
-python -m sim.view_grasp --no-grab
-python -m sim.view_grasp --headless --no-grab
+python -m sim.world.view_grasp --no-grab
+python -m sim.world.view_grasp --headless --no-grab
 # 중력·부력·물 저항을 켠 연결 안정성 확인
-python -m sim.view_grasp --water
-python -m sim.view_grasp --headless --water
-python -m pytest tests/test_grasp.py -q
+python -m sim.world.view_grasp --water
+python -m sim.world.view_grasp --headless --water
+python -m pytest tests/world/test_grasp.py -q
 ```
 
 이번 범위는 `로프 → 구명환 → 손의 잡기 연결 → 사람`의 힘 전달입니다.
@@ -402,7 +402,7 @@ GUI는 12초 뒤 비교를 위해 초기화하여 반복합니다. headless는 �
 
 ```python
 import mujoco
-from sim.view_grasp import GraspDemo
+from sim.world.view_grasp import GraspDemo
 
 demo = GraspDemo()  # 배 없는 시험 장면; 실제 통합에서는 같은 HumanGrasp를 조립
 world = demo.world
@@ -422,9 +422,9 @@ mujoco.mj_forward(world.model, world.data)
 
 ```bash
 source .venv/bin/activate
-python -m sim.view_wear
-python -m sim.view_wear --headless
-python -m pytest tests/test_wear.py -q
+python -m sim.world.view_wear
+python -m sim.world.view_wear --headless
+python -m pytest tests/world/test_wear.py -q
 ```
 
 구명환을 정면에 전달받은 상태에서 약 14초 동안 **양팔을 곧게 뻗어 동시에 통과**시킵니다.
@@ -457,10 +457,10 @@ headless는 50초 안에 착용이 완료되어야 성공합니다.
 
 ```bash
 source .venv/bin/activate
-python -m sim.view_contact                     # 발 쪽에서 1 m/s로 충돌
-python -m sim.view_contact --side side         # 옆(구명환 쪽)에서 충돌. head는 머리 쪽
-python -m sim.view_contact --speed 0.3         # 충돌 속도 바꾸기
-python -m sim.view_contact --side side --push  # 정지 상태에서 최대 추력으로 계속 밀기
+python -m sim.world.view_contact                     # 발 쪽에서 1 m/s로 충돌
+python -m sim.world.view_contact --side side         # 옆(구명환 쪽)에서 충돌. head는 머리 쪽
+python -m sim.world.view_contact --speed 0.3         # 충돌 속도 바꾸기
+python -m sim.world.view_contact --side side --push  # 정지 상태에서 최대 추력으로 계속 밀기
 ```
 
 시작할 때 사람이 물에 자리 잡는 계산(약 5초)을 먼저 합니다. 자리 잡은 사람은 거의 수평으로 누워
@@ -468,12 +468,12 @@ python -m sim.view_contact --side side --push  # 정지 상태에서 최대 추�
 빨간 화살표는 접촉력, 작은 표시는 접촉점입니다. HUD에서 접촉 수, 현재/최대 겹침(mm),
 사람 속도 변화와 완전 탄성 한계, 사람이 밀린 거리를 확인합니다. 3초(밀기는 6초) 뒤 잠시 멈췄다가 반복합니다.
 옆에서 밀면 배가 마찰로 회전해 사람 둘레를 닿은 채 돌아가는데, 이는 관통이 아닌 정상 물리입니다.
-화면 없이 확인하려면 `--headless`를 붙입니다. 같은 장면의 자동 검사는 `python -m pytest tests/test_contact.py -v`입니다.
+화면 없이 확인하려면 `--headless`를 붙입니다. 같은 장면의 자동 검사는 `python -m pytest tests/world/test_contact.py -v`입니다.
 
 ## 잡기·착용 시연의 코드 위치
 
-실행 명령은 `python -m sim.view_grasp`, `python -m sim.view_wear`로 유지합니다.
-`sim/scenarios.py`에는 GraspDemo·WearDemo와 시험용 PullFixture·WearApproachFixture가 있습니다.
+실행 명령은 `python -m sim.world.view_grasp`, `python -m sim.world.view_wear`로 유지합니다.
+`sim/world/scenarios.py`에는 GraspDemo·WearDemo와 시험용 PullFixture·WearApproachFixture가 있습니다.
 자동 테스트는 뷰 대신 이 장면을 직접 사용합니다. `view_*.py`는 실행 옵션·화면·카메라를 담당합니다.
 공통 물리 적분은 `world.advance_world`, 로프 표시는 `rope_visual.draw_rope`를 사용합니다.
 시연별 제어 갱신·반복 리셋과 구조 단계의 Watchdog 실행 순서는 각 호출 측에서 유지합니다.

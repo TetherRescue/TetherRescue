@@ -16,5 +16,5 @@
 저장소 루트의 MuJoCo 환경에서 다음 명령으로 방향별 측정값을 재현한다.
 
 ```sh
-python -m pytest -q -s tests/test_water_physics.py -k heel
+python -m pytest -q -s tests/water/test_water_physics.py -k heel
 ```
