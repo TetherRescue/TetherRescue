@@ -60,7 +60,7 @@
   표에 없는 그룹, 접촉이 켜진 VISUAL·SENSOR geom, 표에 없는 (contype, conaffinity) 조합이 있으면 조립을 중단합니다.
   MjSpec 기본값(group 0, contype 1, conaffinity 1)을 그대로 둔 geom도 여기서 걸리므로 새 형상은 반드시 지정합니다.
 - 이 표를 바꾸는 PR에는 가영 + 해당 형상 담당(배: 동경, 수면 표시: 미현)을 태그합니다.
-- 실제 충돌 시험(`tests/test_contact.py`, 2026-11-16): 구명환 없이 물에 자리 잡은 사람에 배가 발·옆·머리 쪽에서
+- 실제 충돌 시험(`tests/world/test_contact.py`, 2026-11-16): 구명환 없이 물에 자리 잡은 사람에 배가 발·옆·머리 쪽에서
   1 m/s로 부딪히면 겹침 최대 3.0mm, 사람 속도 변화는 완전 탄성 한계 이내(0.22 / 0.44 m/s)입니다.
   최대 추력으로 5초 밀어도 겹침 4mm 이하이며 경고·NaN이 없습니다. 옆에서 밀면 배가 마찰로 회전할 수 있는데,
   이는 관통이 아닌 정상 물리입니다. 현재 solref·solimp는 조정하지 않습니다.
@@ -111,7 +111,7 @@
 ## 구명환 — 형상·로프 연결점 시험 구현 (가영)
 
 - 구조 요구: 배 선미의 `tow_point` → 로프 → 구명환. 사람은 몸통을 환 안에 넣고 팔을 밖으로 둡니다.
-- `sim/lifebuoy.py`는 yz 평면의 원을 캡슐 12개로 근사한 하나의 강체를 만듭니다.
+- `sim/world/lifebuoy.py`는 yz 평면의 원을 캡슐 12개로 근사한 하나의 강체를 만듭니다.
   가운데 구멍은 실제로 열려 있으며, 물리 형상도 하나의 볼록 덩어리로 합치지 않습니다.
 - `config.Lifebuoy`의 시험값: 중심선 반지름 0.325m, 튜브 반지름 0.075m, 총질량 2.5kg (IMO LSA Code 구명환 최소 질량).
   바깥 지름 약 0.8m, 내부 개구 폭은 다각형 근사로 약 0.478m입니다. 실측 제품 사양은 아닙니다.
@@ -397,7 +397,7 @@
 
 ## 시연과 시험 장면의 분리
 
-- 잡기·착용의 조립/진행/초기화와 시험용 외력 장치는 `sim/scenarios.py`에 둡니다.
+- 잡기·착용의 조립/진행/초기화와 시험용 외력 장치는 `sim/world/scenarios.py`에 둡니다.
   `view_grasp.py`·`view_wear.py`는 CLI와 표시를 담당하고 테스트는 scenarios의 장면을 직접 사용합니다.
 - `world.advance_world(world)`는 forward → acc.reset → 각 part.add_forces → acc.apply → step → forward를 실행합니다.
   제어 갱신·반복 리셋은 호출 측의 책임입니다. 기존 PhaseManager/Watchdog의 단계별 검사 순서는 유지합니다.

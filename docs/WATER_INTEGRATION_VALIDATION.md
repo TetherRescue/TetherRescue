@@ -4,7 +4,7 @@
 
 ## 검증 조건
 
-- `dev/chaeyeon`에 최신 원격 main 13개 커밋을 fast-forward 반영한 뒤 실행했다. 기존 미커밋 `tests/test_water_physics.py` 자세 검증과 문서는 보존했다.
+- `dev/chaeyeon`에 최신 원격 main 13개 커밋을 fast-forward 반영한 뒤 실행했다. 기존 미커밋 `tests/water/test_water_physics.py` 자세 검증과 문서는 보존했다.
 - 기존 2026-11-15 측정은 `1bfa303` 기준이다. 최신 main은 잠긴 부피에 따라 저항 계수를 조절하고, 잠긴 복셀 부분의 작용점을 계산하므로 예전 측정과 기준을 구분한다.
 - Conda `tether_rescue`, Python 3.12.14, MuJoCo 3.17.0, NumPy 1.26.4. 물리 시간 간격 0.002 s. 물 밀도 1025 kg/m³, 중력 9.81 m/s², 해류 0.
 - 배 질량 19.6 kg, 길이·폭·높이 1.3 × 0.6 × 0.2 m. 좌우 최대 전진 50 N/대, 후진 20 N/대.
@@ -26,8 +26,8 @@
 
 ```bash
 conda activate tether_rescue
-python -m pytest tests/test_water.py tests/test_robot.py tests/test_water_physics.py tests/test_rescue_approach.py tests/test_rescue_mission.py tests/test_integration.py -q
-python tests/measure_water_integration.py --case all
+python -m pytest tests/water/test_water.py tests/robot/test_robot.py tests/water/test_water_physics.py tests/robot/test_rescue_approach.py tests/world/test_rescue_mission.py tests/test_integration.py -q
+python tests/water/measure_water_integration.py --case all
 ```
 
 측정 스크립트는 시나리오마다 JSON 한 줄을 출력한다. `--case calm_approach`, `calm_mission`, `waves_boat`, `waves_towing`, `waves_approach`, `waves_mission`으로 하나씩 재현할 수 있다. 완료 조건을 만족하지 못한 경우 종료 코드 1을 반환하고 실패 이유를 출력한다. 관측 결과를 통과시키기 위해 제어기·임계값을 완화하지 않는다.
@@ -78,8 +78,8 @@ python tests/measure_water_integration.py --case all
 추가 비교 재현:
 
 ```bash
-python tests/measure_water_integration.py --case waves_towing
-python tests/measure_water_integration.py --case waves_mission --no-cutoff
+python tests/water/measure_water_integration.py --case waves_towing
+python tests/water/measure_water_integration.py --case waves_mission --no-cutoff
 ```
 
 원시 실행 출력은 작업 당시 /tmp에만 저장했고 결과물 파일을 커밋 대상으로 추가하지 않았다. 본 문서의 조건·수치 및 측정 스크립트로 재현할 수 있다.
