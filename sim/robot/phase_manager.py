@@ -28,10 +28,12 @@ class ApproachSettings:
     position_gain: float = 30.0  # 정지 유지 N/m
     heading_gain: float = 1.4  # 목표 yaw 속도 / 방향 오차
     yaw_speed_gain: float = 12.0  # N·m / (rad/s)
-    max_yaw_speed: float = .8
+    max_yaw_speed: float = 1.5  # .8 → 1.5 (2026-11-19 A형, 실험값 — 11/23 회의에서 확정)
     max_force: float = 60.0
     max_brake_force: float = 30.0
-    max_yaw_torque: float = 10.0  # 추진기 한계 ≈ 36.8 N·m (A형 lever 1.05 m × 70 N / 2). 직육면체 때 12.6
+    # 추진기 한계 ≈ 36.8 N·m (A형 lever 1.05 m × 70 N / 2). 직육면체 때 12.6 이라 10 이었음.
+    # 10 → 25 (2026-11-19, 실험값 — 11/23 회의에서 확정): 선미 정렬 회전이 빨라짐
+    max_yaw_torque: float = 25.0
     capture_radius: float = .05
     position_tolerance: float = .20
     reapproach_radius: float = .21
