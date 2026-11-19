@@ -1,7 +1,7 @@
-"""사람·구명환 고정 연결의 자유낙하 데모: python -m sim.view_human.
+"""사람 모델 자유낙하 데모: python -m sim.view_human [--size small|medium|large].
 
 화면을 위한 독립 실행 예제다. 실제 구조 단계 제어는 PhaseManager의 담당이다.
-착용 상태의 형상(몸통이 환 구멍 안, 팔은 환 밖)을 확인하는 용도이며, 사람이 처음부터 환을 낀다는 뜻이 아니다.
+사람 형상·몸집만 확인한다. 구명환은 몸에 끼우지 않으므로 이 화면에 넣지 않는다.
 """
 
 import argparse
@@ -13,7 +13,6 @@ import numpy as np
 from sim import config
 
 from sim.human import Human
-from sim.lifebuoy import Lifebuoy
 from sim.world import advance_world, build_world
 
 
@@ -27,10 +26,10 @@ def advance(world):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--headless", action="store_true", help="창 없이 데모 실행을 검사")
-    parser.add_argument("--human-only", action="store_true", help="구명환 없이 사람만 표시")
+    parser.add_argument("--size", choices=tuple(config.Human.SIZES), default=config.Human.SIZE,
+                        help="사람 몸집 (config.Human.SIZES)")
     args = parser.parse_args()
-    parts = [Human()] if args.human_only else [Human(), Lifebuoy(attached=True)]
-    world = build_world(parts=parts)
+    world = build_world(parts=[Human(size=args.size)])
     if args.headless:
         run_headless(world)
         return

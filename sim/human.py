@@ -9,11 +9,19 @@ class Human:
     # 이 단순 강체만으로 추가 시간 간격 제한을 확정하지 않는다.
     REQUIRES = {}
 
-    def __init__(self, position=(0.0, 0.0, 1.0), *, shape=None, grip_sites=False, articulated_arms=False, ring_contact=True):
+    def __init__(self, position=(0.0, 0.0, 1.0), *, yaw=0.0, shape=None, size=None, grip_sites=False, articulated_arms=False,
+                 ring_contact=True):
         # 기본 위치는 독립 시험용: 수면 기준 1m 위, 몸의 긴 방향은 월드 +x.
         # 실제 구조 장면의 배치는 world 생성 시 별도로 전달한다.
         self.position = position
+        # yaw: 수평면 회전 [rad]. 0이면 머리가 월드 +x. 구조 장면에서 몸 방향을 정할 때 쓴다.
+        self.yaw = float(yaw)
         self.shape = config.Human.SHAPE if shape is None else shape
+        self.size = config.Human.SIZE if size is None else size
+        if self.size not in config.Human.SIZES:
+            raise ValueError(f"Human size는 {tuple(config.Human.SIZES)} 중 하나여야 합니다.")
+        # 키·질량·비율은 build에서 그때의 config로 계산한다.
+        self.height = self.mass = self.length_scale = self.girth_scale = None
         self.grip_sites = grip_sites or articulated_arms
         self.articulated_arms = articulated_arms
         self.ring_contact = ring_contact
@@ -31,12 +39,16 @@ class Human:
         cfg = config.Human
         if self.shape not in ("box", "humanoid"):
             raise ValueError("Human shape은 'box' 또는 'humanoid'여야 합니다.")
-        mass = float(cfg.MASS)
-        if not np.isfinite(mass) or mass <= 0:
-            raise ValueError("사람 질량은 유한한 양수여야 합니다.")
+        # config가 생성 뒤 바뀌어도(시험의 monkeypatch 등) build 시점 값을 쓴다.
+        self.height, self.mass, self.length_scale, self.girth_scale = self._size_scales(self.size)
+        mass = self.mass
         position = self._vector(self.position, "position")
+        s = self.length_scale
 
-        body = spec.worldbody.add_body(name=config.Names.HUMAN_BODY, pos=position)
+        if not np.isfinite(self.yaw):
+            raise ValueError("yaw는 유한한 각도여야 합니다.")
+        quat = [np.cos(self.yaw / 2), 0.0, 0.0, np.sin(self.yaw / 2)]
+        body = spec.worldbody.add_body(name=config.Names.HUMAN_BODY, pos=position, quat=quat)
         body.add_joint(name=config.Names.HUMAN_FREE, type=mujoco.mjtJoint.mjJNT_FREE)
 
         if self.shape == "humanoid":
@@ -44,12 +56,29 @@ class Human:
             if self.grip_sites and not self.articulated_arms:
                 for name, position in ((config.Names.HUMAN_GRIP_L_SITE, cfg.GRIP_L_POINT_B),
                                         (config.Names.HUMAN_GRIP_R_SITE, cfg.GRIP_R_POINT_B)):
-                    body.add_site(name=name, pos=self._vector(position, name), size=[.014, 0, 0],
+                    body.add_site(name=name, pos=self._vector(position, name) * s, size=[.014, 0, 0],
                                   rgba=[.2, 1, .3, 1])
         else:
             if self.grip_sites or self.articulated_arms:
                 raise ValueError("잡기 연결점은 humanoid 형상에서만 지원합니다.")
             self._build_box(body, mass)
+
+    @staticmethod
+    def _size_scales(size):
+        """몸집 이름 → (키 m, 질량 kg, 길이 비율 s, 굵기 비율 s·k). config.Human.SIZE·SIZES 참고."""
+        cfg = config.Human
+        if size not in cfg.SIZES:
+            raise ValueError(f"Human size는 {tuple(cfg.SIZES)} 중 하나여야 합니다.")
+        height, mass = cfg.SIZES[size]
+        reference = float(cfg.REFERENCE_HEIGHT)
+        height = reference if height is None else float(height)
+        mass = float(cfg.MASS) if mass is None else float(mass)
+        if not np.isfinite([height, mass, reference]).all() or min(height, mass, reference) <= 0:
+            raise ValueError("사람 질량·키는 유한한 양수여야 합니다.")
+        s = height / reference
+        # 부피 ∝ s³k² 를 질량비에 맞춰 평균 밀도를 유지한다.
+        k = np.sqrt(mass / float(cfg.MASS) / s**3) if np.isfinite(cfg.MASS) and cfg.MASS > 0 else 1.0
+        return height, mass, s, s * k
 
     def _geom_options(self, *, visual=False):
         if visual:
@@ -66,7 +95,8 @@ class Human:
         import mujoco
 
         cfg = config.Human
-        dimensions = np.array([cfg.LENGTH, cfg.WIDTH, cfg.HEIGHT], dtype=float)
+        dimensions = np.array([cfg.LENGTH * self.length_scale, cfg.WIDTH * self.girth_scale,
+                               cfg.HEIGHT * self.girth_scale], dtype=float)
         if not np.isfinite(dimensions).all() or np.any(dimensions <= 0):
             raise ValueError("사람의 길이·폭·두께는 유한한 양수여야 합니다.")
         com = self._vector(cfg.COM, "Human.COM")
@@ -105,6 +135,8 @@ class Human:
         trousers = [0.10, 0.14, 0.20, 1]
         shoes = [0.055, 0.065, 0.075, 1]
         prefix = names.HUMAN_DETAIL_PREFIX
+        # s: 길이 비율(위치·머리·손발·얼굴), g: 몸통·팔다리 굵기 비율. medium은 둘 다 1.
+        s, g = self.length_scale, self.girth_scale
 
         def ellipsoid(name, position, size, part_mass, color):
             body.add_geom(name=name, type=mujoco.mjtGeom.mjGEOM_ELLIPSOID,
@@ -127,6 +159,7 @@ class Human:
                 or not np.isfinite(sections).all() or np.any(sections[:, 1:] <= 0)
                 or np.any(np.diff(sections[:, 0]) <= 0)):
             raise ValueError("TORSO_SECTIONS_B는 x 오름차순의 (x, 반폭, 반두께) 단면이어야 합니다.")
+        sections = sections * [s, g, g]
         angles = np.arange(16) * 2 * np.pi / 16
         vertices = np.array([[x, width * np.cos(angle), depth * np.sin(angle)]
                              for x, width, depth in sections for angle in angles])
@@ -135,22 +168,22 @@ class Human:
         body.add_geom(name=names.HUMAN_GEOM, type=mujoco.mjtGeom.mjGEOM_MESH,
                       meshname=mesh_name, mass=mass * fractions[0], rgba=shirt,
                       **self._geom_options())
-        head = self._vector(cfg.HEAD_POS_B, "HEAD_POS_B")
-        ellipsoid(names.HUMAN_HEAD_GEOM, head, cfg.HEAD_RADII,
+        head = self._vector(cfg.HEAD_POS_B, "HEAD_POS_B") * s
+        ellipsoid(names.HUMAN_HEAD_GEOM, head, np.asarray(cfg.HEAD_RADII, dtype=float) * s,
                   mass * fractions[1], skin)
         # 목·얼굴·머리카락은 질량 없는 표시 형상. 얼굴은 사람 로컬 +z 방향.
-        capsule(f"{prefix}_neck", [(.42, 0, 0), (.51, 0, 0)], .048, 0, skin)
-        ellipsoid(f"{prefix}_hair", head + [.018, 0, -.018], [.118, .086, .086],
+        capsule(f"{prefix}_neck", np.array([(.42, 0, 0), (.51, 0, 0)]) * s, .048 * g, 0, skin)
+        ellipsoid(f"{prefix}_hair", head + np.array([.018, 0, -.018]) * s, np.array([.118, .086, .086]) * s,
                   0, [.07, .045, .03, 1])
         for side in (-1, 1):
-            ellipsoid(f"{prefix}_eye_{side}", head + [.024, side * .036, .091],
-                      [.012, .010, .006], 0, [.045, .035, .025, 1])
-            ellipsoid(f"{prefix}_ear_{side}", head + [-.006, side * .084, .005],
-                      [.024, .014, .032], 0, skin)
-        ellipsoid(f"{prefix}_nose", head + [-.005, 0, .103],
-                  [.024, .016, .025], 0, skin)
-        ellipsoid(f"{prefix}_mouth", head + [-.052, 0, .089],
-                  [.006, .027, .004], 0, [.34, .14, .12, 1])
+            ellipsoid(f"{prefix}_eye_{side}", head + np.array([.024, side * .036, .091]) * s,
+                      np.array([.012, .010, .006]) * s, 0, [.045, .035, .025, 1])
+            ellipsoid(f"{prefix}_ear_{side}", head + np.array([-.006, side * .084, .005]) * s,
+                      np.array([.024, .014, .032]) * s, 0, skin)
+        ellipsoid(f"{prefix}_nose", head + np.array([-.005, 0, .103]) * s,
+                  np.array([.024, .016, .025]) * s, 0, skin)
+        ellipsoid(f"{prefix}_mouth", head + np.array([-.052, 0, .089]) * s,
+                  np.array([.006, .027, .004]) * s, 0, [.34, .14, .12, 1])
 
         for index, (side, arm_name, leg_name, arm, leg) in enumerate([
             ("l", names.HUMAN_ARM_L_GEOM, names.HUMAN_LEG_L_GEOM,
@@ -159,26 +192,26 @@ class Human:
              cfg.ARM_R_FROMTO_B, cfg.LEG_R_FROMTO_B),
         ]):
             sign = 1 if side == "l" else -1
-            shoulder, wrist = np.asarray(arm, dtype=float)
-            elbow = self._vector(getattr(cfg, f"ELBOW_{side.upper()}_B"), "elbow")
+            shoulder, wrist = np.asarray(arm, dtype=float) * s
+            elbow = self._vector(getattr(cfg, f"ELBOW_{side.upper()}_B"), "elbow") * s
             arm_mass = mass * fractions[2 + index]
             if self.articulated_arms:
                 self._build_arm(spec, body, side, shoulder, elbow, wrist, arm_mass, arm_name)
             else:
-                capsule(arm_name, [shoulder, elbow], cfg.ARM_RADIUS, arm_mass * arm_split[0], shirt)
-                capsule(f"{prefix}_forearm_{side}", [elbow, wrist], cfg.ARM_RADIUS * .78,
+                capsule(arm_name, [shoulder, elbow], cfg.ARM_RADIUS * g, arm_mass * arm_split[0], shirt)
+                capsule(f"{prefix}_forearm_{side}", [elbow, wrist], cfg.ARM_RADIUS * .78 * g,
                         arm_mass * arm_split[1], skin)
-                ellipsoid(f"{prefix}_hand_{side}", wrist + [-.015, sign * .035, 0],
-                          [.037, .065, .022], arm_mass * arm_split[2], skin)
-            hip, ankle = np.asarray(leg, dtype=float)
-            knee = self._vector(getattr(cfg, f"KNEE_{side.upper()}_B"), "knee")
+                ellipsoid(f"{prefix}_hand_{side}", wrist + np.array([-.015, sign * .035, 0]) * s,
+                          np.array([.037, .065, .022]) * s, arm_mass * arm_split[2], skin)
+            hip, ankle = np.asarray(leg, dtype=float) * s
+            knee = self._vector(getattr(cfg, f"KNEE_{side.upper()}_B"), "knee") * s
             leg_mass = mass * fractions[4 + index]
-            capsule(leg_name, [hip, knee], cfg.LEG_RADIUS, leg_mass * leg_split[0], trousers)
-            capsule(f"{prefix}_shin_{side}", [knee, ankle], cfg.LEG_RADIUS * .70,
+            capsule(leg_name, [hip, knee], cfg.LEG_RADIUS * g, leg_mass * leg_split[0], trousers)
+            capsule(f"{prefix}_shin_{side}", [knee, ankle], cfg.LEG_RADIUS * .70 * g,
                     leg_mass * leg_split[1], trousers)
-            ellipsoid(f"{prefix}_foot_{side}", ankle + [-.040, 0, .035],
-                      [.080, .045, .045], leg_mass * leg_split[2], shoes)
-        # 분절에 질량을 분배해 총 70kg 유지. articulated_arms 모드만 팔 관절을 추가한다.
+            ellipsoid(f"{prefix}_foot_{side}", ankle + np.array([-.040, 0, .035]) * s,
+                      np.array([.080, .045, .045]) * s, leg_mass * leg_split[2], shoes)
+        # 분절에 질량을 분배해 몸집별 총질량 유지. articulated_arms 모드만 팔 관절을 추가한다.
 
     def _build_arm(self, spec, root, side, shoulder, elbow, wrist, mass, arm_name):
         """어깨 3·팔꿈치 1·손목 3 관절. 내부 토크는 엔진 actuator로 구동한다."""
@@ -218,18 +251,20 @@ class Human:
                 actuator.biasprm[:3] = [0., -110., -20.]
         skin, shirt = [.72, .48, .32, 1], [.12, .39, .52, 1]
         prefix = names.HUMAN_DETAIL_PREFIX
+        s, g = self.length_scale, self.girth_scale
         upper.add_geom(name=arm_name, type=mujoco.mjtGeom.mjGEOM_CAPSULE,
-                       fromto=np.r_[np.zeros(3), elbow - shoulder], size=[cfg.ARM_RADIUS, 0, 0],
+                       fromto=np.r_[np.zeros(3), elbow - shoulder], size=[cfg.ARM_RADIUS * g, 0, 0],
                        mass=mass * arm_split[0], rgba=shirt, **self._geom_options())
         forearm.add_geom(name=f"{prefix}_forearm_{side}", type=mujoco.mjtGeom.mjGEOM_CAPSULE,
-                         fromto=np.r_[np.zeros(3), wrist - elbow], size=[cfg.ARM_RADIUS * .78, 0, 0],
+                         fromto=np.r_[np.zeros(3), wrist - elbow], size=[cfg.ARM_RADIUS * .78 * g, 0, 0],
                          mass=mass * arm_split[1], rgba=skin, **self._geom_options())
         sign = 1 if side == 'l' else -1
         hand.add_geom(name=f"{prefix}_hand_{side}", type=mujoco.mjtGeom.mjGEOM_ELLIPSOID,
-                      pos=[-.015, sign * .035, 0], size=[.037, .065, .022],
+                      pos=np.array([-.015, sign * .035, 0]) * s, size=np.array([.037, .065, .022]) * s,
                       mass=mass * arm_split[2], rgba=skin, **self._geom_options())
         grip_name = names.HUMAN_GRIP_L_SITE if side == 'l' else names.HUMAN_GRIP_R_SITE
-        hand.add_site(name=grip_name, pos=[.022, sign * .035, 0], size=[.014, 0, 0], rgba=[.2, 1, .3, 1])
+        hand.add_site(name=grip_name, pos=np.array([.022, sign * .035, 0]) * s, size=[.014, 0, 0],
+                      rgba=[.2, 1, .3, 1])
 
     @staticmethod
     def _segment_fractions(name):

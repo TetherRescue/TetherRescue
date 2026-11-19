@@ -2,8 +2,8 @@
 
 실행: python -m sim.view_tether [--headless]
 물·실제 선체·연결 단계 전환·끊김은 이 독립 데모에 포함하지 않는다.
-구명환을 이미 착용했다고 가정하고 견인 단계만 떼어 본 시험이다.
-실제 흐름(배가 구명환을 건네줌 → 사람이 받거나 착용 → 견인)은 view_grasp·view_wear와 단계 연결에서 다룬다.
+사람이 구명환을 이미 손에 쥐었다고 가정하고 견인 단계만 떼어 본 시험이다 (구명환은 몸에 끼우지 않는다).
+실제 흐름(배가 구명환을 건네줌 → 사람이 손으로 잡음 → 견인)은 view_grasp와 단계 연결에서 다룬다.
 """
 
 import argparse
@@ -13,6 +13,7 @@ import mujoco
 import numpy as np
 
 from sim import config
+from sim.grasp import HumanGrasp
 from sim.human import Human
 from sim.lifebuoy import Lifebuoy
 from sim.rope_visual import rope_curve
@@ -45,9 +46,16 @@ class DemoAnchor:
         pass
 
 
+def _held_ring_parts():
+    """고정점과 같은 y에 로프 연결점이 오도록 사람을 두고, 구명환을 왼손에 쥔 상태로 만든다."""
+    tow = Lifebuoy.held_tow_point_b()
+    human = Human(position=(0, .325 - tow[1], 1 - tow[2]), grip_sites=True)
+    return [human, Lifebuoy(held_by=human), HumanGrasp(held=True)]
+
+
 def build_demo_world():
     # 실제 연결 시점의 확정이 아니라 시험에서만 처음부터 연결하는 설정이다.
-    return build_world(parts=[DemoAnchor(), Human(), Lifebuoy(attached=True), Tether(enabled=True)])
+    return build_world(parts=[DemoAnchor(), *_held_ring_parts(), Tether(enabled=True)])
 
 
 class PullComparison:
@@ -55,7 +63,7 @@ class PullComparison:
     def __init__(self):
         self.rope = Tether(enabled=True)
         self.world = build_world(
-            parts=[DemoAnchor(floor=True), Human(), Lifebuoy(attached=True), self.rope], gravity=0.0,
+            parts=[DemoAnchor(floor=True), *_held_ring_parts(), self.rope], gravity=0.0,
         )
         self.clock = 0.0
         self.phase = None
@@ -118,7 +126,7 @@ class PullComparison:
                   "HELD": "2 / RESET TO STRETCHED SETUP - paused before release",
                   "RELEASED": "3 / RELEASED - watch the person follow"}
         return (mujoco.mjtFontScale.mjFONTSCALE_150, mujoco.mjtGridPos.mjGRID_TOPLEFT,
-                "TETHER TEST (gravity OFF, ring already worn)\n" + titles[self.phase] + "\n\n"
+                "TETHER TEST (gravity OFF, ring held in left hand)\n" + titles[self.phase] + "\n\n"
                 "Endpoint gap\nRope / rest length\nSlack (extra rope)\nExtension\nTension\nPerson movement\n\n"
                 "Gray: slack | Orange: pulling\nRed arrow: force (scaled)\nBlue line: initial position",
                 "\n\n\n"

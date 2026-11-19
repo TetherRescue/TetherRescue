@@ -45,7 +45,8 @@ class RescueApproach:
     고정된 사람이 아닌 강체 부유 시험이며 전역 장애물 회피 계획기는 아니다.
     """
 
-    def __init__(self, world, robot, *, tow_heading=0., settings=None, navigation=None):
+    def __init__(self, world, robot, *, tow_heading=0., settings=None, navigation=None, target_site=None):
+        # target_site: 접근 목표 site 이름. 생략하면 구명환 로프 연결점 (기존 동작).
         import mujoco
 
         if robot not in world.parts or robot.body_id is None:
@@ -56,7 +57,8 @@ class RescueApproach:
             raise ValueError('견인 방향은 유한한 각도여야 합니다.')
         self.target_heading = math.atan2(math.sin(tow_heading), math.cos(tow_heading))
         try:
-            self.ring_site = world.model.site(config.Names.LIFEBUOY_TOW_SITE).id
+            self.ring_site = world.model.site(config.Names.LIFEBUOY_TOW_SITE if target_site is None
+                                              else target_site).id
             self.stern_site = world.model.site(config.Names.TOW_POINT_SITE).id
             human_body = world.model.body(config.Names.HUMAN_BODY).id
         except KeyError as error:

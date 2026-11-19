@@ -140,11 +140,12 @@ def test_surface_towing_starts_slack_and_stays_afloat_for_ten_seconds():
 
 
 def test_person_and_ring_float_without_thrust_or_rope():
-    human = Human(position=(0, 0, -.03))
+    from sim.grasp import HumanGrasp
+    human = Human(position=(0, 0, -.03), grip_sites=True)
     boat = Robot(position=(4, 0, .1))
     water = Water(waves=(), floating_bodies=[config.Names.HUMAN_BODY, config.Names.LIFEBUOY_BODY])
-    world = build_world(parts=[water, boat, human, Lifebuoy(attached=True)])
-    # 구명환을 낀 사람은 3~5초에 한 번 크게 기울었다가 약 9초에 자리 잡는다 (2026-11-16 측정).
+    # 구명환은 몸에 끼우지 않고 왼손에 쥔다 (2026-11-19 착용 삭제).
+    world = build_world(parts=[water, boat, human, Lifebuoy(held_by=human), HumanGrasp(held=True)])
     for _ in range(5000):
         advance(world)
     assert -.6 < world.data.xpos[human.body_id, 2] < .4

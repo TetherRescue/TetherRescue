@@ -131,3 +131,34 @@ def test_segment_split_sets_actual_geom_masses():
                            (model.geom(thigh).name, leg * config.Human.LEG_SEGMENT_FRACTIONS[0]),
                            (model.geom(foot).name, leg * config.Human.LEG_SEGMENT_FRACTIONS[2])):
         assert spec_geoms[name] == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("size", ["small", "medium", "large"])
+def test_size_sets_mass_height_and_keeps_density(size):
+    from sim.buoyancy import body_voxels
+    human = Human(position=(0, 0, 0), size=size)
+    model = build_world(parts=[human], gravity=0.0).model
+    height, mass = config.Human.SIZES[size]
+    height = config.Human.REFERENCE_HEIGHT if height is None else height
+    mass = config.Human.MASS if mass is None else mass
+    assert model.body_subtreemass[human.body_id] == pytest.approx(mass)
+    assert human.length_scale == pytest.approx(height / config.Human.REFERENCE_HEIGHT)
+    # 머리 중심 x는 키 비율대로 이동한다.
+    head = model.geom(config.Names.HUMAN_HEAD_GEOM).id
+    assert model.geom_pos[head][0] == pytest.approx(config.Human.HEAD_POS_B[0] * human.length_scale)
+    # 몸통·팔다리 굵기를 질량에 맞춰 평균 밀도가 medium(약 985kg/m³)과 크게 다르지 않다.
+    points, half, _ = body_voxels(model, human.body_id, .01)
+    density = mass / (len(points) * np.prod(2 * half))
+    assert 950 < density < 1030
+
+
+def test_yaw_turns_the_body_about_vertical():
+    human = Human(position=(0, 0, 0), yaw=np.pi / 2)
+    data = build_world(parts=[human], gravity=0.0).data
+    np.testing.assert_allclose(data.xmat[human.body_id].reshape(3, 3)[:, 0], [0, 1, 0], atol=1e-12)
+
+
+def test_medium_is_default_and_unknown_size_is_rejected():
+    assert Human().size == "medium"
+    with pytest.raises(ValueError):
+        Human(size="huge")

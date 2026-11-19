@@ -9,6 +9,7 @@ import mujoco
 import numpy as np
 
 from sim import config
+from sim.grasp import HumanGrasp
 from sim.human import Human
 from sim.lifebuoy import Lifebuoy
 from sim.rescue_approach import RescueApproach
@@ -22,8 +23,33 @@ from sim.world import build_world
 from sim.watchdog import WatchdogSettings
 
 
-def _build_rescue_world(*, start, victim, yaw, tow_heading, rope):
-    """같은 부유 장면을 접근 단독·전체 시나리오에서 사용한다."""
+HANDOFF_SITE = 'human_handoff_point'
+
+
+class HandoffPoint:
+    """구명환 없는 접근 시연용 목표점. 손에 쥐었다면 구명환 로프 연결점이 있을 사람 로컬 위치에 site만 둔다.
+
+    물리 형상·질량·힘은 없다. 배가 구명환을 건네주러 멈출 자리를 표시하는 용도다.
+    """
+    REQUIRES = {}
+
+    def __init__(self, human):
+        self.human = human
+
+    def build(self, spec):
+        point = Lifebuoy.held_tow_point_b(length_scale=self.human.length_scale)
+        spec.body(config.Names.HUMAN_BODY).add_site(name=HANDOFF_SITE, pos=point, size=[.02, 0, 0],
+                                                    rgba=[.1, .3, 1., 1.])
+
+    def bind(self, model):
+        pass
+
+    def add_forces(self, model, data, acc):
+        pass
+
+
+def _build_rescue_world(*, start, victim, yaw, tow_heading, rope, ring=True):
+    """같은 부유 장면을 접근 단독·전체 시나리오에서 사용한다. ring=False면 구명환 없이 사람만 띄운다."""
     start, victim = np.asarray(start, dtype=float), np.asarray(victim, dtype=float)
     if (start.shape != (2,) or victim.shape != (2,) or not np.isfinite(start).all()
             or not np.isfinite(victim).all() or not math.isfinite(yaw) or not math.isfinite(tow_heading)):
@@ -31,9 +57,16 @@ def _build_rescue_world(*, start, victim, yaw, tow_heading, rope):
     draft = config.Hull.MASS / (config.Physics.RHO_WATER * config.Hull.LENGTH * config.Hull.BEAM)
     robot = Robot(position=(*start, config.WaterParams.SURFACE_Z + config.Hull.HEIGHT / 2 - draft),
                   tow_point_b=config.Hull.TOW_POINT_B)
-    human = Human(position=(*victim, config.WaterParams.SURFACE_Z - .03))
-    water = Water(waves=(), floating_bodies=[config.Names.HUMAN_BODY, config.Names.LIFEBUOY_BODY], surface_visual=True)
-    world = build_world(parts=[water, robot, human, Lifebuoy(attached=True), rope])
+    # 구명환을 쥔 왼손이 견인 방향을 보게 몸을 돌린다. 머리가 견인 방향이면 환이 몸 옆 1.35m에 있어
+    # 줄이 옆으로 당겨 배가 목표 옆 22cm에 멈췄다 (차동 추진은 옆으로 못 감, 2026-11-19 측정).
+    human = Human(position=(*victim, config.WaterParams.SURFACE_Z - .03), grip_sites=ring,
+                  yaw=tow_heading - math.pi / 2 if ring else 0.)
+    floating = [config.Names.HUMAN_BODY] + ([config.Names.LIFEBUOY_BODY] if ring else [])
+    water = Water(waves=(), floating_bodies=floating, surface_visual=True)
+    # 구명환은 몸에 끼우지 않는다. 전체 시나리오는 사람이 이미 왼손에 쥔 상태로 시작하는 시험 흐름이다.
+    victim_parts = ([human, Lifebuoy(held_by=human), HumanGrasp(held=True)] if ring
+                    else [human, HandoffPoint(human)])
+    world = build_world(parts=[water, robot, *victim_parts, rope])
     address = world.model.jnt_qposadr[robot.joint_id]
     quaternion = [math.cos(yaw / 2), 0, 0, math.sin(yaw / 2)]
     world.model.qpos0[address + 3:address + 7] = quaternion
@@ -42,11 +75,14 @@ def _build_rescue_world(*, start, victim, yaw, tow_heading, rope):
     return world, robot
 
 
-def build_rescue_demo(*, start=(6., 3.), victim=(0., 0.), yaw=0., tow_heading=0.):
-    """기존 접근 단독 API: 로프를 생성하지 않는다. 각도 rad."""
+def build_rescue_demo(*, start=(6., 3.), victim=(0., 0.), yaw=0., tow_heading=0., ring=True):
+    """기존 접근 단독 API: 로프를 생성하지 않는다. 각도 rad.
+
+    ring=False: 구명환 없이 떠 있는 사람에게 접근해 건네줄 자리(HandoffPoint)에서 멈춘다.
+    """
     world, robot = _build_rescue_world(start=start, victim=victim, yaw=yaw,
-                                        tow_heading=tow_heading, rope=Tether(enabled=False))
-    return RescueApproach(world, robot, tow_heading=tow_heading)
+                                        tow_heading=tow_heading, rope=Tether(enabled=False), ring=ring)
+    return RescueApproach(world, robot, tow_heading=tow_heading, target_site=None if ring else HANDOFF_SITE)
 
 
 def build_rescue_mission(*, start=(6., 3.), victim=(0., 0.), yaw=0., tow_heading=0., tow_distance=6., watchdog_settings=None):
@@ -122,6 +158,8 @@ def main():
     parser.add_argument('--failure-demo', choices=('timeout', 'capsize', 'nonfinite', 'warning'),
                         help='Watchdog 중단 동작을 확인하는 오류 주입 시연')
     parser.add_argument('--approach-only', action='store_true', help='기존 로프 없는 연결 대기 시험')
+    parser.add_argument('--no-ring', action='store_true',
+                        help='구명환 없이 사람에게 접근만 (건네줄 자리에서 정지). --approach-only 포함')
     parser.add_argument('--tow-distance', type=float, default=6., help='연결 후 배의 이동 거리 [m], 4m 초과')
     parser.add_argument('--start', type=float, nargs=2, default=(6, 3), metavar=('X', 'Y'))
     parser.add_argument('--victim', type=float, nargs=2, default=(0, 0), metavar=('X', 'Y'))
@@ -131,8 +169,11 @@ def main():
     args = parser.parse_args()
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error('--timeout은 유한한 양수여야 합니다.')
+    if args.no_ring:
+        args.approach_only = True  # 구명환이 없으면 줄을 묶을 곳이 없어 견인 단계는 실행하지 않는다.
     builder = build_rescue_demo if args.approach_only else build_rescue_mission
-    options = {} if args.approach_only else dict(tow_distance=args.tow_distance)
+    options = (dict(ring=not args.no_ring) if args.approach_only
+               else dict(tow_distance=args.tow_distance))
     manager = builder(start=args.start, victim=args.victim, yaw=math.radians(args.yaw),
                       tow_heading=math.radians(args.heading), **options)
     if args.failure_demo:

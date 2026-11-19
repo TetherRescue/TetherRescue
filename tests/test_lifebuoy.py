@@ -1,4 +1,4 @@
-"""구명환의 실제 구멍·총질량·고정 연결·연결점 좌표 검증."""
+"""구명환의 실제 구멍·총질량·손에 쥔 배치·연결점 좌표 검증. 구명환은 몸에 끼우지 않는다."""
 
 import numpy as np
 import pytest
@@ -38,28 +38,50 @@ def test_center_is_open_but_rim_intercepts_ray():
     assert hit_id[0] >= 0
 
 
-def test_worn_support_keeps_ring_near_torso_and_can_be_released():
-    human, ring = Human(), Lifebuoy(attached=True)
-    world = build_world(parts=[human, ring], gravity=0)
-    assert world.model.body_parentid[ring.body_id] == 0
-    assert ring.is_worn(world.data)
+def _held(**human_options):
+    from sim.grasp import HumanGrasp
+    human = Human(grip_sites=True, **human_options)
+    ring, grasp = Lifebuoy(held_by=human), HumanGrasp(held=True)
+    return human, ring, grasp
+
+
+def test_held_ring_starts_in_hand_and_follows_the_person():
+    human, ring, grasp = _held()
+    world = build_world(parts=[human, ring, grasp], gravity=0)
+    model, data = world.model, world.data
+    assert grasp.is_held(data)
+    assert grasp.metrics(model, data)['distance'] == pytest.approx(.02, abs=1e-9)
+    rotation = data.xmat[human.body_id].reshape(3, 3)
+    tow_b = rotation.T @ (data.site_xpos[ring.site_id] - data.xpos[human.body_id])
+    np.testing.assert_allclose(tow_b, Lifebuoy.held_tow_point_b(), atol=1e-9)
+    start = rotation.T @ (data.xpos[ring.body_id] - data.xpos[human.body_id])
     for _ in range(1000):
-        mujoco.mj_forward(world.model, world.data)
-        rotation = world.data.xmat[human.body_id].reshape(3, 3)
-        relative = rotation.T @ (world.data.xpos[ring.body_id] - world.data.xpos[human.body_id])
-        np.testing.assert_allclose(relative, config.Lifebuoy.POSITION_IN_HUMAN_B, atol=.002)
-        expected_site = world.data.xpos[ring.body_id] + world.data.xmat[ring.body_id].reshape(3, 3) @ config.Lifebuoy.TOW_POINT_B
-        np.testing.assert_allclose(world.data.site_xpos[ring.site_id], expected_site, atol=1e-10)
         world.acc.reset()
-        world.acc.add(ring.body_id, [1, 0, 0], point_w=world.data.site_xpos[ring.site_id])
-        world.acc.apply(world.model, world.data)
-        mujoco.mj_step(world.model, world.data)
-    qpos, qvel = world.data.qpos.copy(), world.data.qvel.copy()
-    assert ring.release_worn(world.model, world.data)
-    assert not ring.is_worn(world.data)
-    np.testing.assert_array_equal(world.data.qpos, qpos)
-    np.testing.assert_array_equal(world.data.qvel, qvel)
-    assert not world.data.warning.number.any()
+        world.acc.add(ring.body_id, [5, 0, 0], point_w=data.site_xpos[ring.site_id])
+        world.acc.apply(model, data)
+        mujoco.mj_step(model, data)
+        mujoco.mj_forward(model, data)
+    rotation = data.xmat[human.body_id].reshape(3, 3)
+    relative = rotation.T @ (data.xpos[ring.body_id] - data.xpos[human.body_id])
+    np.testing.assert_allclose(relative, start, atol=.002)
+    assert data.qvel[0] > 0  # 환을 당긴 힘이 손을 통해 사람에게 전달된다
+    assert not data.warning.number.any()
+
+
+@pytest.mark.parametrize("size", ["small", "medium", "large"])
+def test_held_ring_does_not_touch_or_surround_the_body(size):
+    human, ring, grasp = _held(size=size, yaw=.7)
+    world = build_world(parts=[human, ring, grasp], gravity=0)
+    model, data = world.model, world.data
+    ring_ids = np.flatnonzero(model.geom_bodyid == ring.body_id)
+    for human_id in human.geom_ids.values():
+        if model.geom_contype[human_id]:
+            for ring_id in ring_ids:
+                assert mujoco.mj_geomDistance(model, data, human_id, ring_id, 1.0, None) > .005
+    # 몸통 중심이 환 구멍 안에 있지 않다 (환 중심이 손 쪽 바깥에 있다).
+    rotation = data.xmat[human.body_id].reshape(3, 3)
+    center_b = rotation.T @ (data.xpos[ring.body_id] - data.xpos[human.body_id])
+    assert center_b[1] > config.Lifebuoy.CENTERLINE_RADIUS + config.Lifebuoy.TUBE_RADIUS
 
 
 def test_default_world_includes_lifebuoy():
@@ -68,26 +90,13 @@ def test_default_world_includes_lifebuoy():
     assert world.model.site(config.Names.LIFEBUOY_TOW_SITE).id >= 0
 
 
-def test_humanoid_fits_hole_and_arms_extend_outside_without_penetration():
-    human, ring = Human(), Lifebuoy(attached=True)
-    world = build_world(parts=[human, ring])
-    model, data = world.model, world.data
-    ring_ids = np.flatnonzero(model.geom_bodyid == ring.body_id)
-    for human_id in human.geom_ids.values():
-        for ring_id in ring_ids:
-            assert mujoco.mj_geomDistance(model, data, human_id, ring_id, 1.0, None) > 0
-    # 상체 중심은 환 구멍 안에 있고, 손 쪽 끝은 환의 바깥 반지름을 넘는다.
-    opening_radius = (config.Lifebuoy.CENTERLINE_RADIUS * np.cos(np.pi / config.Lifebuoy.SEGMENTS)
-                      - config.Lifebuoy.TUBE_RADIUS)
-    assert config.Human.TORSO_RADIUS < opening_radius
-    outer_radius = config.Lifebuoy.CENTERLINE_RADIUS + config.Lifebuoy.TUBE_RADIUS
-    assert config.Human.ARM_L_FROMTO_B[1][1] > outer_radius
-    assert config.Human.ARM_R_FROMTO_B[1][1] < -outer_radius
-
-
-def test_attached_ring_needs_human_first():
-    with pytest.raises(ValueError, match="Human.build"):
-        build_world(parts=[Lifebuoy(attached=True)])
+def test_wearing_is_removed_and_held_ring_needs_human_first():
+    with pytest.raises(ValueError, match="삭제"):
+        Lifebuoy(attached=True)
+    with pytest.raises(ValueError, match="Human"):
+        build_world(parts=[Lifebuoy(held_by=Human(grip_sites=True))])
+    with pytest.raises(ValueError, match="Human"):
+        build_world(parts=[Human(), Lifebuoy(held_by=Human())])  # 잡기 site 없는 사람
 
 
 @pytest.mark.parametrize("name,value", [("SEGMENTS", 2), ("TUBE_RADIUS", 0.5), ("MASS", -1)])

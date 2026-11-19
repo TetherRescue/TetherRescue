@@ -95,12 +95,13 @@ python -m sim.view_human
 창을 닫으면 종료합니다. 이는 독립 데모의 반복 동작이며 실제 구조 시나리오의 리셋 정책이 아닙니다.
 렌더러가 EGL로 설정되어 창이 열리지 않으면 `MUJOCO_GL=glfw python -m sim.view_human`을 사용합니다.
 화면이 없는 환경에서는 `python -m sim.view_human --headless`로 데모의 계산만 확인할 수 있습니다.
-기존 사람만 보려면 `python -m sim.view_human --human-only`로 실행합니다.
+구명환은 사람 몸에 끼우지 않으므로 이 화면에는 사람만 나옵니다.
+몸집은 `--size small|medium|large`로 고릅니다 (기본 medium). 예: `python -m sim.view_human --size large`.
 구명환 검증만 실행하려면 `python -m pytest tests/test_lifebuoy.py -v`를 사용합니다.
 
 ## 로프 견인 시험 보기
 
-> 이 시험은 구명환을 이미 착용했다고 가정하고 견인 단계만 떼어 본 것입니다. 실제 흐름은 배가 줄+구명환을 건네주고 사람이 받거나 착용한 뒤 견인합니다.
+> 이 시험은 사람이 구명환을 이미 왼손에 쥐었다고 가정하고 견인 단계만 떼어 본 것입니다. 구명환은 몸에 끼우지 않습니다(2026-11-19 착용 삭제). 실제 흐름은 배가 줄+구명환을 건네주고 사람이 손으로 잡은 뒤 견인합니다.
 
 ```bash
 source .venv/bin/activate
@@ -138,7 +139,7 @@ python -m pytest tests/test_tether.py -v
 
 ## 물 위에서 배가 사람을 견인하는 시험
 
-> 이 시험은 구명환을 이미 착용했다고 가정하고 견인 단계만 떼어 본 것입니다. 실제 흐름은 배가 줄+구명환을 건네주고 사람이 받거나 착용한 뒤 견인합니다.
+> 이 시험은 사람이 구명환을 이미 왼손에 쥐었다고 가정하고 견인 단계만 떼어 본 것입니다. 구명환은 몸에 끼우지 않습니다(2026-11-19 착용 삭제). 실제 흐름은 배가 줄+구명환을 건네주고 사람이 손으로 잡은 뒤 견인합니다.
 
 ```bash
 python -m sim.view_towing
@@ -217,6 +218,7 @@ GUI는 리셋 없이 계속 실행하며 창을 닫으면 종료합니다.
 
 ```bash
 python -m sim.view_rescue --approach-only
+python -m sim.view_rescue --no-ring              # 구명환 없는 사람에게 접근, 건네줄 자리에서 정지
 python -m sim.view_rescue --approach-only --headless
 python -m sim.view_rescue --approach-only --start -6 0 --yaw 0
 python -m sim.view_rescue --approach-only --start 5 6 --yaw 180 --heading 90
@@ -415,41 +417,8 @@ mujoco.mj_forward(world.model, world.data)
 
 조립 순서는 사람·독립 구명환의 site 생성 뒤 `HumanGrasp.build`, compile, bind입니다.
 새 에피소드에서는 `mj_resetData` 뒤 `HumanGrasp.reset(model, data)`로 참조 자세도 초기화합니다.
-기존 `Lifebuoy()` 기본 고정 모드는 옛 시험 호환용입니다. 새 전달 흐름에서는 반드시
-`attached=False, grip_sites=True`를 명시합니다. 기존 `view_rescue`의 배 제어·Watchdog에는 아직 합치지 않았습니다.
-
-## 사람이 스스로 구명환을 끼는 시험
-
-```bash
-source .venv/bin/activate
-python -m sim.view_wear
-python -m sim.view_wear --headless
-python -m pytest tests/test_wear.py -q
-```
-
-구명환을 정면에 전달받은 상태에서 약 14초 동안 **양팔을 곧게 뻗어 동시에 통과**시킵니다.
-배의 탑재·전달 동작은 포함하지 않는 **중력 0의 관절·접근 동작 시험**입니다.
-
-1. `WAITING`: 사람과 구명환은 독립 강체이며, 로프는 환에 연결되어 있습니다.
-2. `ALIGN_ARMS`: 전달 완료 신호를 받으면 양어깨를 동시에 돌려 팔을 나란히 뻗습니다. 팔꿈치와 손목의 목표 각도는 계속 0도입니다.
-3. `INSERT_BOTH`: 환을 전달 위치에 지지하고 사람이 앞으로 접근합니다. 양손과 팔, 머리가 환의 구멍을 지나 몸통에 환이 도달합니다.
-4. `WORN`: 실제 양팔 자세와 환의 정렬을 확인하고 몸통 착용 지지를 켭니다. 접근 시험 장치의 지지를 모두 해제하며, 팔은 계속 뻗어 있습니다.
-
-관절 팔의 0도 형상 자체를 위팔·아래팔이 일직선이 되도록 맞췄습니다.
-양팔 총 14개 내부 위치 actuator 중 어깨만 회전하며, 팔꿈치를 접거나 한 팔씩 넣는 단계는 없습니다.
-관절 범위와 목표 각도 속도 제한(초당 1.25rad)을 적용하며 **실제 qpos/qvel을 덮어쓰지 않습니다**.
-인체 총질량은 70kg입니다. 사람↔구명환 접촉을 유지하고 소재 관통 여부를 검사합니다.
-
-`WearApproachFixture`는 시연 전용 외력 제어 장치입니다. 환을 건네는 위치에 지지하고 사람의 접근 이동을 재현합니다.
-배 제어나 실제 수영 추진력 모델이 아니며, 실제 통합에서는 전달부·사람 이동 제어로 대체해야 합니다.
-한 손으로 잡아 끌어내리는 기존 `view_grasp` 시험과 달리, 이 동작에서는 손 잡기 weld를 켜지 않습니다.
-착용 후 힘은 몸통↔환의 weld 지지 근사로 전달됩니다. 겨드랑이 접촉·마찰 전체를 재현하는 모델은 아닙니다.
-`SelfWear.measurements(data)['ready_to_tow']`가 True일 때 견인을 시작하세요.
-
-기존 강체 사람·한 손 잡기 시연은 유지합니다. 관절 팔은 `Human(articulated_arms=True)`에서만 생성합니다.
-기본 인체 형상과 정면 전달 배치에 맞춘 순서 제어이며, 수상 착용·해부학적 근력·임의 자세의 충돌 회피는 검증하지 않았습니다.
-GUI는 사람 정면을 따라가는 시점으로 보여줍니다. `--free-camera`로 자동 시점 회전을 끌 수 있습니다.
-headless는 50초 안에 착용이 완료되어야 성공합니다.
+구명환 착용(`attached=True`)은 삭제했습니다. 전달 흐름에서는 `Lifebuoy(grip_sites=True)`를,
+처음부터 쥔 시험은 `Lifebuoy(held_by=human)` + `HumanGrasp(held=True)`를 씁니다. 기존 `view_rescue`의 배 제어·Watchdog에는 아직 합치지 않았습니다.
 
 ## 배가 물에 뜬 사람에 부딪히는 충돌 시험
 
@@ -470,10 +439,10 @@ python -m sim.view_contact --side side --push  # 정지 상태에서 최대 추�
 옆에서 밀면 배가 마찰로 회전해 사람 둘레를 닿은 채 돌아가는데, 이는 관통이 아닌 정상 물리입니다.
 화면 없이 확인하려면 `--headless`를 붙입니다. 같은 장면의 자동 검사는 `python -m pytest tests/test_contact.py -v`입니다.
 
-## 잡기·착용 시연의 코드 위치
+## 잡기 시연의 코드 위치
 
-실행 명령은 `python -m sim.view_grasp`, `python -m sim.view_wear`로 유지합니다.
-`sim/scenarios.py`에는 GraspDemo·WearDemo와 시험용 PullFixture·WearApproachFixture가 있습니다.
+실행 명령은 `python -m sim.view_grasp`로 유지합니다. 구명환 착용 시연(`view_wear`)은 2026-11-19 삭제했습니다.
+`sim/scenarios.py`에는 GraspDemo와 시험용 PullFixture가 있습니다.
 자동 테스트는 뷰 대신 이 장면을 직접 사용합니다. `view_*.py`는 실행 옵션·화면·카메라를 담당합니다.
 공통 물리 적분은 `world.advance_world`, 로프 표시는 `rope_visual.draw_rope`를 사용합니다.
 시연별 제어 갱신·반복 리셋과 구조 단계의 Watchdog 실행 순서는 각 호출 측에서 유지합니다.
