@@ -26,6 +26,11 @@ class RescueApproachSettings:
     #   → 다리 끝에서 0.7 m (직육면체 때 선미에서 0.7 m 와 같은 여유) = 0.7 + 0.9. 로프 REST_LENGTH 2.0 보다 짧아 느슨
     connection_gap: float = 1.6
     waypoint_tolerance: float = .5
+    # 바깥 경로(TRANSIT) 중간 경유점에서는 멈추지 않고 이 속도 [m/s] 로 지나간다. 마지막 경유점·대기 위치는
+    # 기존 정밀 정지(navigation)를 그대로 쓴다. 이유 (2026-11-19 측정): 경유점마다 감속해 접근 평균 0.24~0.34 m/s.
+    # [실험값 — 11/23 회의에서 확정]
+    transit_speed: float = 3.0   # A형 최고 속도 약 3.3 m/s (2026-11-19 측정)
+    transit_gain: float = 2.0    # 경유점까지 거리 × 이 값 = 원하는 속도 (멈추지 않게 크게)
     docking_speed: float = .3  # 마지막 후진 속도 .2 → .3 (2026-11-17)
     gap_tolerance: float = .15
     relative_speed_tolerance: float = .06
@@ -161,6 +166,29 @@ class RescueApproach:
         stern_offset = yaw_rotation @ (rotation @ self._stern_b)[:2]
         return self.world.data.site_xpos[self.ring_site, :2] + gap * self.direction - stern_offset
 
+    def _passed_waypoint(self):
+        """중간 경유점을 사람 둘레 각도로 이미 지났는지. 마지막 경유점은 정확히 가야 하므로 False.
+
+        빠르게 달리면 회전 반경(속도 ÷ 최대 회전 속도)이 waypoint_tolerance 보다 커서 경유점 주위를 맴돈다
+        (2026-11-19, 1.5 m/s 에서 확인). 각도로 지났으면 다음 경유점으로 넘긴다.
+        """
+        if self._route_index + 1 >= len(self._angles):
+            return False
+        offset = self.world.data.xipos[self.robot.body_id, :2] - self.world.data.site_xpos[self.ring_site, :2]
+        angle = math.atan2(offset[1], offset[0])
+        waypoint = self._angles[self._route_index]
+        turn = self._angles[-1] - self._angles[0]
+        ahead = math.atan2(math.sin(angle - waypoint), math.cos(angle - waypoint))
+        return ahead * math.copysign(1., turn) >= 0
+
+    def _set_transit_speed(self):
+        """중간 경유점은 빠르게 지나가고, 마지막 경유점부터는 정밀 정지 설정으로 감속한다."""
+        if self.stage != RescueStage.TRANSIT:
+            return
+        last = self._route_index + 1 >= len(self._angles)
+        self.controller.settings = (self.navigation if last else replace(
+            self.navigation, max_speed=self.settings.transit_speed, distance_gain=self.settings.transit_gain))
+
     def _route_target(self):
         angle = self._angles[self._route_index]
         return (self.world.data.site_xpos[self.ring_site, :2]
@@ -192,12 +220,16 @@ class RescueApproach:
         self.check_clearance()
         # 이 제어기는 물리 상태를 리셋하거나 사람 위치를 직접 바꾸지 않는다.
         if self.stage == RescueStage.TRANSIT:
+            self._set_transit_speed()
             self.controller.target_xy[:] = self._route_target()
-            if np.linalg.norm(self.controller.target_xy - world.data.xipos[self.robot.body_id, :2]) < self.settings.waypoint_tolerance:
+            near = np.linalg.norm(self.controller.target_xy - world.data.xipos[self.robot.body_id, :2]) < self.settings.waypoint_tolerance
+            if near or self._passed_waypoint():
                 if self._route_index + 1 < len(self._angles):
                     self._route_index += 1
                 else:
                     self.stage = RescueStage.ALIGN_STERN
+                    self.controller.settings = self.navigation
+                self._set_transit_speed()
                 self.controller.reset()
         if self.stage == RescueStage.ALIGN_STERN:
             self.controller.target_xy[:] = self._body_target(self.settings.staging_gap)
