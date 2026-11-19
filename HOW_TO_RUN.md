@@ -432,6 +432,25 @@ mujoco.mj_forward(world.model, world.data)
 구명환 착용(`attached=True`)은 삭제했습니다. 전달 흐름에서는 `Lifebuoy(grip_sites=True)`를,
 처음부터 쥔 시험은 `Lifebuoy(held_by=human)` + `HumanGrasp(held=True)`를 씁니다. 기존 `view_rescue`의 배 제어·Watchdog에는 아직 합치지 않았습니다.
 
+## 월미도 해안 구조 시나리오 (환경 3개)
+
+```bash
+source .venv/bin/activate
+python -m sim.world.view_wolmido                    # calm: 만조·잔잔
+python -m sim.world.view_wolmido --env waves        # 만조·파도
+python -m sim.world.view_wolmido --env low_tide     # 간조: 해변·바위가 드러남
+python -m sim.world.view_wolmido --env calm --headless
+python -m pytest tests/world/test_map_wolmido.py -q
+```
+
+맵에는 방파제·산책로(가로등·벤치·구명환 보관함·대관람차), 경사 사석과 바위, 테트라포드 구간, 계단식 친수 호안,
+여객선 선착장(폰툰·말뚝·연결 다리·묶인 배), 항로 표지 부표가 있습니다.
+인천 월미도 앞바다에서 사람이 떠내려간 상황입니다. 사람은 바다 한가운데(−38, 4)m에 구명환 없이 떠 있습니다.
+구조 로봇은 구명환을 배 뒤 짧은 줄(1m)에 달고 해변 물가에서 출발해, 사람 둘레를 돌아 선미를 사람 손 쪽으로 댄 뒤
+윈치로 줄을 3m까지 풀어 구명환을 건넵니다. 사람이 손을 뻗어 잡으면 해변 쪽으로 최대 8m 끌고 와 멈춥니다.
+화면 왼쪽 위에 단계(APPROACH·DELIVER·GRAB·TOW·COMPLETE), 윈치 상태, 손–구명환 거리, 장력이 나옵니다.
+`waves`는 현재 접근 제어가 파도 속에서 정지 조건을 만족하지 못해 접근 단계 200초에 중단됩니다 (지형 없는 장면도 같음).
+
 ## 배가 물에 뜬 사람에 부딪히는 충돌 시험
 
 > 접근 단계처럼 사람은 구명환이 없습니다. 실제 흐름에서는 배가 닿지 않고 멈춰야 하며, 이 장면은 그 제어가 실패한 최악 상황입니다.

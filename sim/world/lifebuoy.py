@@ -8,7 +8,7 @@ class Lifebuoy:
     REQUIRES = {}
 
     def __init__(self, *, position=None, grip_sites=False, human_contact=True, held_by=None, hand='left',
-                 attached=False):
+                 attached=False, quat=None):
         # 구명환은 사람 몸에 끼우지 않는다 (2026-11-19 가영 결정: 착용 모드 삭제).
         # attached=False는 기존 호출(다른 팀원 시험 포함)과의 호환용으로만 받는다.
         if attached:
@@ -24,6 +24,13 @@ class Lifebuoy:
         self.grip_sites = grip_sites or held_by is not None
         self.human_contact = human_contact
         self.position = position
+        # quat: 독립 배치의 초기 자세 (w, x, y, z). 생략하면 원이 yz 평면(구멍 축이 x)인 기본 자세.
+        self.quat = None if quat is None else np.asarray(quat, dtype=float)
+        if self.quat is not None and (self.quat.shape != (4,) or not np.isfinite(self.quat).all()
+                                      or np.linalg.norm(self.quat) == 0):
+            raise ValueError('quat는 0이 아닌 유한한 숫자 4개여야 합니다.')
+        if held_by is not None and quat is not None:
+            raise ValueError('held_by를 쓰면 자세는 손 기준으로 정합니다.')
         self.body_id = self.site_id = None
 
     @staticmethod
@@ -52,7 +59,7 @@ class Lifebuoy:
         if segments < 3 or tube >= radius * np.cos(np.pi / segments):
             raise ValueError('구명환은 캡슐 3개 이상이고 가운데 구멍이 열려 있어야 합니다.')
         position = self._vector(cfg.INDEPENDENT_POSITION_W if self.position is None else self.position, 'position')
-        quat = np.array([1., 0., 0., 0.])
+        quat = np.array([1., 0., 0., 0.]) if self.quat is None else self.quat / np.linalg.norm(self.quat)
         if self.held_by is not None:
             human = spec.body(names.HUMAN_BODY)
             hand_name = names.HUMAN_GRIP_L_SITE if self.hand == 'left' else names.HUMAN_GRIP_R_SITE
