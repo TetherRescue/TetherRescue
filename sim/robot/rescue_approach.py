@@ -22,7 +22,9 @@ class RescueApproachSettings:
     # 모두 시연용 가정값. route_radius는 선체가 방향을 바꿀 공간을 포함한다.
     route_radius: float = 4.5
     staging_gap: float = 3.0
-    connection_gap: float = .7
+    # 줄 묶는 점 ↔ 구명환 연결점 거리. A형(2026-11-19)은 묶는 점이 홈 앞끝이라 다리가 그 뒤로 0.9 m 더 나옴
+    #   → 다리 끝에서 0.7 m (직육면체 때 선미에서 0.7 m 와 같은 여유) = 0.7 + 0.9. 로프 REST_LENGTH 2.0 보다 짧아 느슨
+    connection_gap: float = 1.6
     waypoint_tolerance: float = .5
     docking_speed: float = .3  # 마지막 후진 속도 .2 → .3 (2026-11-17)
     gap_tolerance: float = .15
@@ -65,9 +67,11 @@ class RescueApproach:
             raise ValueError('선미 연결점은 로봇에 속해야 합니다.')
         self.navigation = ApproachSettings() if navigation is None else navigation
         self.direction = np.array([math.cos(self.target_heading), math.sin(self.target_heading)])
-        self._stern_b = world.model.site_pos[self.stern_site].copy()
-        if self._stern_b[0] >= 0:
-            raise ValueError('선미 연결점은 로봇의 뒤쪽에 있어야 합니다.')
+        # 선미 연결점 위치는 무게중심 기준 (PhaseManager 가 무게중심을 목표에 맞추므로)
+        self._stern_b = world.model.site_pos[self.stern_site] - world.model.body_ipos[robot.body_id]
+        # A형은 줄 묶는 점이 홈 앞끝(원점보다 앞, x +0.15)이라 "x < 0" 대신 "선체 앞끝보다 뒤" 만 확인한다
+        if world.model.site_pos[self.stern_site][0] >= config.Hull.LENGTH / 2:
+            raise ValueError('선미 연결점은 선체 앞끝보다 뒤에 있어야 합니다.')
         self._staging_distance = self.settings.staging_gap - self._stern_b[0]
         if self.settings.route_radius < self._staging_distance:
             raise ValueError('바깥 경로 반지름은 대기 위치 거리 이상이어야 합니다.')
@@ -102,12 +106,11 @@ class RescueApproach:
         self._last_time = float(self.world.data.time)
 
     def clearance(self):
-        """현재 hull과 사람·구명환 사이 최소 표면 간격. 파생 위치 갱신 후 호출한다."""
+        """현재 배 충돌 형상과 사람·구명환 사이 최소 표면 간격. 파생 위치 갱신 후 호출한다."""
         import mujoco
 
-        return min(mujoco.mj_geomDistance(self.world.model, self.world.data,
-                                         self.robot.geom_id, geom, 10., None)
-                   for geom in self.victim_geoms)
+        return min(mujoco.mj_geomDistance(self.world.model, self.world.data, boat, geom, 10., None)
+                   for boat in self.robot.collision_geom_ids for geom in self.victim_geoms)
 
     def check_clearance(self):
         """현재 파생 위치에서 간격을 제어 주기로 검사한다. 견인 단계에서도 재사용한다."""
@@ -121,7 +124,7 @@ class RescueApproach:
                 raise RuntimeError('선체와 사람·구명환의 간격이 너무 작아 접근 시험을 중단했습니다.')
 
     def _plan_route(self):
-        offset = self.world.data.xpos[self.robot.body_id, :2] - self.world.data.site_xpos[self.ring_site, :2]
+        offset = self.world.data.xipos[self.robot.body_id, :2] - self.world.data.site_xpos[self.ring_site, :2]
         radius = float(np.linalg.norm(offset))
         if radius < self.settings.route_radius:
             raise ValueError('이 시험은 배를 구명환에서 route_radius 이상 떨어뜨려 시작해야 합니다.')
@@ -183,7 +186,7 @@ class RescueApproach:
         # 이 제어기는 물리 상태를 리셋하거나 사람 위치를 직접 바꾸지 않는다.
         if self.stage == RescueStage.TRANSIT:
             self.controller.target_xy[:] = self._route_target()
-            if np.linalg.norm(self.controller.target_xy - world.data.xpos[self.robot.body_id, :2]) < self.settings.waypoint_tolerance:
+            if np.linalg.norm(self.controller.target_xy - world.data.xipos[self.robot.body_id, :2]) < self.settings.waypoint_tolerance:
                 if self._route_index + 1 < len(self._angles):
                     self._route_index += 1
                 else:

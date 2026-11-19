@@ -34,14 +34,17 @@ class GoalMarker:
 
 
 def build_approach_demo(*, start=(0., 0.), target=(4., 2.), yaw=0., target_heading=0.):
-    """각도 인자는 rad. 목표는 선체 중심의 xy이며 도착 방향은 기본 월드 +x."""
+    """각도 인자는 rad. 출발·목표는 배 무게중심의 xy이며 도착 방향은 기본 월드 +x."""
     start, target = np.asarray(start, dtype=float), np.asarray(target, dtype=float)
     if (start.shape != (2,) or target.shape != (2,) or not np.isfinite(start).all()
             or not np.isfinite(target).all() or not math.isfinite(yaw) or not math.isfinite(target_heading)):
         raise ValueError("출발·목표 좌표와 방향은 유한한 값이어야 합니다.")
-    draft = config.Hull.MASS / (config.Physics.RHO_WATER * config.Hull.LENGTH * config.Hull.BEAM)
-    height = config.WaterParams.SURFACE_Z + config.Hull.HEIGHT / 2 - draft
-    robot = Robot(position=(*start, height))
+    height = config.WaterParams.SURFACE_Z + config.Hull.HEIGHT / 2 - config.Expect.DRAFT
+    # PhaseManager 는 무게중심을 목표에 맞춘다 → 원점(상자 중심)을 무게중심이 start 에 오도록 놓는다
+    com_x, com_y = config.Hull.COM[:2]
+    origin = start - np.array([math.cos(yaw) * com_x - math.sin(yaw) * com_y,
+                               math.sin(yaw) * com_x + math.cos(yaw) * com_y])
+    robot = Robot(position=(*origin, height))
     world = build_world(parts=[Water(waves=(), surface_visual=True), robot, GoalMarker(target)])
     address = world.model.jnt_qposadr[robot.joint_id]
     world.data.qpos[address + 3:address + 7] = [math.cos(yaw / 2), 0, 0, math.sin(yaw / 2)]
