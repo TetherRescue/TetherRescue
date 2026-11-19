@@ -247,7 +247,24 @@ CLI 각도는 도, `build_rescue_demo`·`RescueApproach` API 각도는 rad입니
 일반 장애물 회피 계획기가 아닙니다. `READY`는 로프가 실제 연결됐다는 뜻이 아닙니다.
 실제 연결과 견인은 아래 전체 시나리오에서 실행합니다.
 
-## 접근 → 로프 연결 → 견인 → 정지 전체 시나리오
+## 구명환 발사 구조 시나리오 (2026-11-19, 기본 구조 방식)
+
+```bash
+python -m sim.world.view_launch --speed 3
+python -m sim.world.view_launch --headless
+python -m sim.world.view_launch --start 5 6 --yaw 180 --heading 90
+python -m pytest tests/robot/test_launcher.py -q
+```
+
+배 홈 위 발사대에 구명환을 고정해 싣고 출발합니다. 줄은 처음부터 배와 구명환에 연결되어 있고 느슨합니다.
+`APPROACH`에서 바깥 경로를 돌아 선미를 사람 쪽으로 두고 줄 묶는 점이 사람 손에서 3 m(`Launcher.STAGING_GAP`)인
+자리에 멈춥니다. 후진하지 않고 그 자리에서 `LAUNCH`: 발사대 weld를 풀고 0.05초 동안 밀어 쏩니다(반동은 배가 받음).
+동시에 윈치를 발사 거리 + 2 m로 풀어 날아가는 동안 줄이 당기지 않습니다. 구명환이 물에 닿으면 `GRAB`에서
+잡는 점이 손 0.45 m 안이고 느리면 사람이 잡은 것으로 보고 `TOW`로 끌고 갑니다.
+공기 저항·바람·팔 뻗는 동작은 없습니다. 착수 속력이 약 4.4 m/s라 실제로는 사람 몸에 맞지 않게 겨눠야 합니다.
+`--speed`는 화면 배속이며, 계산이 못 따라가면 실제 배속은 그보다 낮을 수 있습니다.
+
+## 접근 → 로프 연결 → 견인 → 정지 전체 시나리오 (착용 구명환, 이전 방식)
 
 ```bash
 python -m sim.world.view_rescue
