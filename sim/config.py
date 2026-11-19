@@ -71,6 +71,8 @@ class Names:
     LIFEBUOY_GRIP_L_SITE = "lifebuoy_grip_l"
     LIFEBUOY_GRIP_R_SITE = "lifebuoy_grip_r"
     HUMAN_RING_GRASP_EQ = "human_ring_grasp"
+    # 착용 weld 이름. 착용 기능은 2026-11-19 삭제했지만 동경 launcher.py가 "착용 weld가 없는지" 검사할 때 쓰므로 이름만 남긴다.
+    HUMAN_RING_WORN_EQ = "human_ring_worn"
     HUMAN_ARM_BODY_PREFIX = "human_arm_body"
     HUMAN_ARM_JOINT_PREFIX = "human_arm_joint"
     HUMAN_ARM_ACTUATOR_PREFIX = "human_arm_drive"
@@ -80,6 +82,7 @@ class Names:
     WOLMIDO_PREFIX = "wolmido"            # 월미도 맵 형상 이름 앞부분 (가영)
     WOLMIDO_WALL_GEOM = "wolmido_wall"
     WOLMIDO_RIPRAP_GEOM = "wolmido_riprap"
+    LAUNCHER_MOUNT_EQ = "launcher_mount"  # 발사 전 구명환을 배 발사대에 고정하는 weld (로봇 launcher.py)
     LIFEBUOY_BODY = "lifebuoy"
     LIFEBUOY_FREE = "lifebuoy_free"       # 구명환 단독 시험 때만 사용하는 자유 관절
     LIFEBUOY_GEOM_PREFIX = "lifebuoy_segment"
@@ -119,13 +122,16 @@ class Frames:
 # ─────────────────────────────────────────────────────────────
 # 3. 선체 — 값은 로봇이 정해서 물에 넘김
 # ─────────────────────────────────────────────────────────────
-def _mass_properties(shell_mass, shell_size, parts):
+def _mass_properties(shell_mass, shell_size, parts, shell_center=(0.0, 0.0, 0.0)):
     """선체 껍데기(균일 상자) + 부품(점 질량) → (총무게, 무게중심, 관성 대각).
+
+    shell_center: 껍데기 무게중심 (몸체 좌표). A형처럼 상자 일부가 비면 상자 중심과 다르다.
+      껍데기 관성은 그 점을 중심으로 한 상자(shell_size)로 근사한다.
 
     관성은 무게중심 기준. 부품은 평행축 정리 m·d² 로 더한다.
     곱관성(xy·xz·yz)은 버린다 — robot.py 가 대각 관성만 넣음 (부품이 거의 좌우 대칭이라 작음).
     """
-    items = [(shell_mass, (0.0, 0.0, 0.0))] + list(parts.values())
+    items = [(shell_mass, tuple(shell_center))] + list(parts.values())
     mass = sum(m for m, _ in items)
     com = tuple(sum(m * p[i] for m, p in items) / mass for i in range(3))
     a, b, c = shell_size
@@ -140,42 +146,64 @@ def _mass_properties(shell_mass, shell_size, parts):
 
 # 합의: 2026-11-13 회의. 250 kg PoC 보트는 무인 로봇에 너무 무거워서,
 # EMILY(Hydronalix, emilyrobot.com) 공식 스펙을 참고해 더 넓고 낮게 만든 무인 구조정으로 바꿈.
-# 물의 흘수 테스트(Expect.DRAFT ≈ 0.025 m)가 첫 검증.
+# 변경: 2026-11-19 동경 — 직육면체 → A형 (구명환을 싣는 홈 + 가운데 카메라). 실험 근거는 PR 설명.
 class Hull:
-    # 무엇: 배 상자의 길이(x, 앞뒤)·폭(y, 좌우)·높이(z, 위아래) [m].
-    # 사용: 로봇(xml 선체 geom 크기), 물(복셀 크기, 흘수 계산). 두 곳 모두 이 값만 읽는다
-    #       (PoC 는 두 곳에 따로 적고 시작 시 비교했음 → 여기 한 곳으로).
-    # 이유: 길이는 EMILY 1.27 m 와 비슷하게 (공식 스펙 기반). 폭은 EMILY 0.36 m 의 약 1.7배로 넓혀
-    #       옆으로 덜 넘어가게, 높이는 낮춰 무게중심을 내림 (우리 설계, 검증 전)
-    LENGTH = 1.3
-    BEAM = 0.6
+    # 무엇: 선체를 감싸는 상자의 길이(x, 앞뒤)·폭(y, 좌우)·높이(z, 위아래) [m].
+    #   실제 모양(SHAPE)은 이 상자에서 홈·문풀·뱃머리 양옆을 뺀 것. 원점 = 상자 중심
+    # 사용: 로봇(부력 기준 상자 geom 크기), 물(복셀을 이 상자 기준으로 만든 뒤 모양 밖 칸을 버림)
+    # 이유: 폭 1.2 m = 홈 0.9 m(구명환 바깥지름 0.8 + 여유 0.1) + 양쪽 다리 0.15 m.
+    #       길이 1.5 m = 홈 깊이 0.9 + 연결부 0.3 + 뱃머리 0.3.
+    #       다리를 0.3 → 0.15 m, 길이를 1.7 → 1.5 m 로 줄인 이유: 넓으면 같은 무게에 흘수가 1.4 cm 로 얕아져
+    #       노즐(바닥)이 파도에 물 밖으로 나옴. 이 치수면 흘수 약 2.2 cm (직육면체 때 2.5 cm)
+    LENGTH = 1.5
+    BEAM = 1.2
     HEIGHT = 0.2
-    # 무엇: 부력 계산에 쓰는 선체 모양. "box" = 직육면체로 근사.
-    # 사용: 물(복셀이 상자 기준), 테스트(흘수를 곱셈·나눗셈만으로 손 계산 가능)
-    # 이유: 둥근 모서리·손잡이는 그림일 뿐 부력에 안 들어감. 단순하고 정답을 손으로 구할 수 있음
-    SHAPE = "box"
-    # 무엇: 선체 껍데기(복합재 + 폼) 무게 [kg]. 상자 전체에 고르게 퍼져 있다고 봄
+    # 무엇: 선체 모양. "a_frame" = A형, "box" = 상자 전체 (예전 방식, 손 계산 시험용)
+    #
+    #   위에서 본 모양 (x 앞 = 위쪽, 단위 m)
+    #       x=+0.75        ╱▔▔▔╲          뱃머리: 반폭 0.6 → 0.2 로 좁아짐 (x 0.45 ~ 0.75)
+    #                    ╱       ╲
+    #       x=+0.45     ├─────────┤
+    #                   │  연결부  │       연결부 x 0.15 ~ 0.45. 카메라·전자장비·윈치가 여기
+    #       x=+0.15     ├─┐     ┌─┤ ← 줄 묶는 점 (홈 앞끝 가운데)
+    #                   │왼│ 홈 │오│       홈 0.9 × 0.9, 다리 폭 0.15, 다리 끝에 워터젯
+    #       x=-0.75     └─┘     └─┘
+    # 사용: 물(hull_contains 로 복셀 거르기), 로봇(충돌 형상), 아래 WATERPLANE_* 계산
+    # 이유: 2026-11-19 실험 — 카메라를 가운데(연결부)에 두면 뱃머리보다 상하 가속도가 정지 0.82 vs 1.12,
+    #       주행 1.66 vs 2.79 m/s² 로 덜 흔들림. 홈은 구명환을 싣고 뒤로 내보내는 자리
+    SHAPE = "a_frame"
+    SLOT_DEPTH = 0.9            # 홈 깊이 [m] (선미 −0.85 부터 앞으로)
+    SLOT_WIDTH = 0.9            # 홈 폭 [m]
+    BOW_START_X = 0.45          # 뱃머리가 좁아지기 시작하는 x [m]
+    BOW_TIP_HALF_BEAM = 0.2     # 뱃머리 끝 반폭 [m]
+    # 무엇: 연결부 가운데 구멍(문풀) (x 시작, x 끝, 반폭) [m]. None = 없음
+    # 이유: 실험 때는 A 글자처럼 구멍을 뚫었지만 연결부가 0.3 m 라 부품 자리가 없어져서 뺌
+    MOON_POOL = None
+    # 무엇: 선체 껍데기(복합재 + 폼) 무게 [kg]. 관성 계산에서는 상자 전체에 고르게 퍼져 있다고 봄 (근사)
     # 이유: 추정값. EMILY 전체 11.8 kg 에서 추진기·배터리를 뺀 크기를 폭에 맞춰 키움 (실측 아님)
     SHELL_MASS = 8.0
     # 무엇: 배에 싣는 부품 = 이름: (무게 kg, 위치 (x, y, z) m). 몸체 좌표(FLU), 원점 = 상자 중심
-    #   상자 범위: x ±0.65, y ±0.3, z ±0.1 (바닥 −0.1, 윗면 +0.1). 잔잔한 물 수면은 약 z −0.075
+    #   상자 범위: x ±0.75, y ±0.6, z ±0.1 (바닥 −0.1, 윗면 +0.1). 다리 가운데 y = ±0.525
     # 사용: 아래 MASS·COM·INERTIA 계산, Sensors 위치. 로봇 build 는 부품을 따로 만들지 않고 합친 값만 넣음
-    # 이유: 무게는 전부 추정값. 소나 + 추가 배터리 근거 = Sonar EMILY 16.8 kg − Beach EMILY 11.8 kg ≈ 5 kg
+    # 이유: 무게는 전부 추정값 (직육면체 때와 같은 무게, 자리만 A형에 맞춤).
+    #       A형은 뒤쪽이 홈으로 비어 부력 중심이 앞(x 약 +0.19)에 있음 → 무게중심도 거기 오도록
+    #       가장 무거운 배터리를 뱃머리에 둠 (어긋나면 뱃머리가 들린 채 뜸). 카메라는 연결부 가운데 (위 SHAPE 이유)
     PARTS = {
-        "battery":     (4.0, (0.30, 0.0, -0.07)),    # 가장 무거움 → 바닥. 뒤쪽 제트·윈치와 균형 맞추려고 앞쪽
-        "jet_l":       (1.5, (-0.50, 0.18, -0.07)),  # 워터젯 왼쪽 (바닥에서 물을 빨아 뒤로 쏨)
-        "jet_r":       (1.5, (-0.50, -0.18, -0.07)), # 워터젯 오른쪽
-        "electronics": (1.0, (0.10, 0.0, -0.05)),    # 통신·GPS·IMU. 가운데가 가장 덜 흔들림
-        "sonar":       (1.0, (0.45, 0.0, -0.09)),    # 바닥 앞쪽 (Sonar EMILY 처럼 용골 쪽, 제트 거품 피함)
-        "camera":      (0.6, (0.60, 0.0, 0.17)),     # 듀얼(일반 + 열화상) 모듈. 선수 윗면 위 7 cm, 수면 위 약 0.25 m
-        "winch":       (2.0, (-0.45, 0.0, 0.04)),    # 줄 감는 장치. 줄 묶는 점 바로 앞 (가영 tether.py 와 연결 방식 확인)
+        "battery_l":   (2.0, (0.55, 0.25, -0.07)),   # 배터리 둘로 나눠 뱃머리 바닥 좌우
+        "battery_r":   (2.0, (0.55, -0.25, -0.07)),
+        "jet_l":       (1.5, (-0.60, 0.525, -0.07)), # 워터젯 왼쪽 (왼쪽 다리 끝)
+        "jet_r":       (1.5, (-0.60, -0.525, -0.07)),# 워터젯 오른쪽
+        "electronics": (1.0, (0.40, 0.0, -0.05)),    # 통신·GPS·IMU. 연결부 앞쪽 가운데
+        "winch":       (2.0, (0.25, 0.0, 0.04)),     # 줄 감는 장치. 줄 묶는 점(홈 앞끝) 바로 앞
+        "sonar":       (1.0, (0.65, 0.0, -0.09)),    # 뱃머리 바닥 (용골 쪽, 제트 거품 피함)
+        "camera":      (0.6, (0.30, 0.0, 0.17)),     # 듀얼(일반 + 열화상) 모듈. 연결부 가운데 윗면 위 7 cm
     }
     # 무엇: 배 전체 무게 [kg], 무게중심 (몸체 좌표) [m], 관성 = 돌리기 어려운 정도 [kg·m²]
     #   관성 순서 (롤 좌우 기울기, 피치 앞뒤 기울기, 요 방향 돌기). 소유자 = 로봇. 물은 질량을 건드리지 않는다.
     # 사용: 로봇(xml inertial), 물(흘수·감쇠 — 단 물은 MuJoCo 모델에서 직접 읽음)
-    # 이유: PARTS 에서 계산 (≈ 19.6 kg, (−0.015, 0, −0.023), (0.42, 3.15, 3.40)).
+    # 이유: PARTS 에서 계산 (≈ 19.6 kg). 껍데기는 상자로 근사해 관성이 실제보다 조금 큼
     #       부품만 옮기면 셋이 같이 바뀜 → 따로 적다가 하나만 고치는 사고 방지
-    MASS, COM, INERTIA = _mass_properties(SHELL_MASS, (LENGTH, BEAM, HEIGHT), PARTS)
+    #   계산은 클래스 아래 (껍데기 무게중심 = 모양 중심이 hull_contains 로 구해져야 해서)
     # 무엇: 선외기 무게를 별도 부품으로 둘지 (True / False).
     #   False = 선외기 무게를 MASS 에 포함, 선외기는 그림으로만 (PoC 방식)
     #   True  = 선외기 부품(Names.OUTBOARD_BODY)에 OUTBOARD_MASS 를 주고, 그만큼 MASS 에서 뺀다
@@ -187,10 +215,64 @@ class Hull:
     # 무엇: 선외기 1대(또는 전체) 무게 [kg]. OUTBOARD_SEPARATE = True 일 때만 사용 (지금은 안 씀)
     OUTBOARD_MASS = None
     # 무엇: 줄(tether)을 묶는 점 위치 [m], 몸체 좌표(FLU). Names.TOW_POINT_SITE 가 이 자리에 놓인다.
-    #   x −0.65 = 선미 끝, z +0.1 = 선체 윗면 (물 밖이라 줄이 워터젯에 빨려 들어가지 않음)
+    #   x +0.15 = 홈 앞끝(연결부 뒷면) 가운데, z +0.1 = 선체 윗면 (물 밖이라 줄이 워터젯에 빨려 들어가지 않음)
     # 사용: 로봇 build(site 위치), 가영 tether.py(줄 한쪽 끝)
-    # 이유: PoC 와 같은 자리(선미 윗면)를 새 선체 크기에 맞춤. 선미에서 끌면 배가 사람 쪽으로 머리를 두고 끌고 가기 좋음
-    TOW_POINT_B = (-0.65, 0.0, 0.1)
+    # 이유: 구명환이 홈 가운데를 지나 뒤로 끌려 나가도록 홈 앞끝 가운데에 묶음 (양쪽 다리에 줄이 걸리지 않음)
+    TOW_POINT_B = (0.15, 0.0, 0.1)
+
+
+def hull_contains(points_b):
+    """몸체 좌표 점들(..., 3) 이 선체 모양(Hull.SHAPE) 안인지 → bool 배열 (z 는 보지 않음, 위에서 본 모양만).
+
+    물은 상자 복셀 중 이 값이 True 인 칸만 부력에 쓰고, 아래 WATERPLANE_* 도 이 함수로 계산한다
+    → 물·로봇·흘수 정답값이 같은 모양을 본다.
+    """
+    import numpy as np
+    p = np.asarray(points_b, dtype=float)
+    x, y = p[..., 0], np.abs(p[..., 1])
+    inside = (np.abs(x) <= Hull.LENGTH / 2) & (y <= Hull.BEAM / 2)
+    if Hull.SHAPE == "box":
+        return inside
+    if Hull.SHAPE != "a_frame":
+        raise ValueError(f"Hull.SHAPE 는 'a_frame' 또는 'box' (지금 {Hull.SHAPE!r})")
+    stern = -Hull.LENGTH / 2
+    t = np.clip((x - Hull.BOW_START_X) / (Hull.LENGTH / 2 - Hull.BOW_START_X), 0, 1)
+    half = Hull.BEAM / 2 - t * (Hull.BEAM / 2 - Hull.BOW_TIP_HALF_BEAM)
+    in_slot = (x < stern + Hull.SLOT_DEPTH) & (y < Hull.SLOT_WIDTH / 2)
+    in_pool = np.zeros(x.shape, dtype=bool)
+    if Hull.MOON_POOL is not None:
+        x0, x1, half_w = Hull.MOON_POOL
+        in_pool = (x > x0) & (x < x1) & (y < half_w)
+    return inside & (y < half) & ~in_slot & ~in_pool
+
+
+def _waterplane(step=0.005):
+    """수면에 닿는 넓이 [m²], 그 중심 x̄ [m], 2차 모멘트 (roll: ∫y², pitch: ∫(x−x̄)²) [m⁴].
+
+    hull_contains 를 촘촘한 격자(step)로 세어 구한다. 상자면 L·B, L·B³/12, B·L³/12 와 같다.
+    물의 흘수·복원력 손 계산에 쓴다 (직육면체 공식 L·B 대신).
+    """
+    import numpy as np
+    xs = (np.arange(round(Hull.LENGTH / step)) + 0.5) * step - Hull.LENGTH / 2
+    ys = (np.arange(round(Hull.BEAM / step)) + 0.5) * step - Hull.BEAM / 2
+    gx, gy = np.meshgrid(xs, ys, indexing="ij")
+    mask = hull_contains(np.stack([gx, gy, np.zeros_like(gx)], axis=-1))
+    da = step * step
+    area = float(mask.sum() * da)
+    xc = float((gx * mask).sum() * da / area)
+    i_roll = float((gy ** 2 * mask).sum() * da)
+    i_pitch = float(((gx - xc) ** 2 * mask).sum() * da)
+    return area, xc, (i_roll, i_pitch)
+
+
+# 무엇: 수면에 닿는 넓이 [m²], 2차 모멘트 (roll, pitch) [m⁴]. 모양(SHAPE)에서 계산 (pitch 는 넓이 중심 기준)
+# 사용: 물(흘수·위아래 출렁임 세기·복원력), Expect.DRAFT
+# 무엇: 수면에 닿는 넓이 중심 x [m] = 똑바로 뜬 배의 부력 중심 x. 무게중심 x 가 여기와 같아야 수평으로 뜸
+Hull.WATERPLANE_AREA, Hull.WATERPLANE_CENTER_X, Hull.WATERPLANE_INERTIA = _waterplane()
+# 껍데기는 모양 전체에 고르게 퍼져 있다고 봄 → 껍데기 무게중심 = 모양 중심 (z 는 상자 가운데)
+Hull.MASS, Hull.COM, Hull.INERTIA = _mass_properties(
+    Hull.SHELL_MASS, (Hull.LENGTH, Hull.BEAM, Hull.HEIGHT), Hull.PARTS,
+    shell_center=(Hull.WATERPLANE_CENTER_X, 0.0, 0.0))
 
 
 # ─────────────────────────────────────────────────────────────
@@ -222,14 +304,14 @@ class Thruster:
     # 이유: PoC 방식. 러더·선외기 회전이 필요 없어 단순 (그래서 Hull.OUTBOARD_SEPARATE = False)
     STEERING = "differential"
     # 무엇: 좌·우 워터젯 노즐 위치 [m], 몸체 좌표(FLU, 선체 중심 기준). Names.THRUSTER_L/R_SITE 가 이 자리에 놓인다.
-    #   x −0.60 = 선미(배 끝 −0.65)에서 5 cm 안쪽, y ±0.18 = 좌(+)·우(−) 대칭, z −0.10 = 선체 바닥
+    #   x −0.70 = 선미(다리 끝 −0.75)에서 5 cm 안쪽, y ±0.525 = 좌(+)·우(−) 다리 가운데, z −0.10 = 선체 바닥
     #   수면이 약 z −0.075 라 노즐은 약 2.5 cm 잠김 (바닥보다 더 내릴 수는 없음)
     # 사용: 로봇 build(site 위치), add_forces(추력 작용점)
-    # 이유: 워터젯 본체(Hull.PARTS jet_l/r) 바로 뒤. 좌우 간격(0.36 m)이 넓을수록 같은 추력 차이로 더 잘 돈다.
+    # 이유: 워터젯 본체(Hull.PARTS jet_l/r) 바로 뒤. 좌우 간격(1.05 m, A형 다리 사이)이 넓을수록 같은 추력 차이로 더 잘 돈다.
     #       z 는 2026-11-13 검증(임시 물 모델)으로 −0.09 → −0.10. −0.09(1.5 cm 잠김)는 파도에 한쪽 노즐이 자주
     #       물 밖에 나와 60 초에 99° 옆으로 돌았고, −0.10 은 33° 로 줄었음
-    POS_L_B = (-0.60, 0.18, -0.10)
-    POS_R_B = (-0.60, -0.18, -0.10)
+    POS_L_B = (-0.70, 0.525, -0.10)
+    POS_R_B = (-0.70, -0.525, -0.10)
     # 무엇: 프로펠러가 이 깊이 [m] 이상 잠겨야 추력 100%. 파도로 물 밖에 나오면 추력이 줄어든다.
     # 사용: 로봇. 물의 수면 높이 함수가 필요함 (WaterAPI 참고)
     # 결정: 비워 둠. WaterAPI.USE_IN_WEEK1 = False 라 1주차엔 안 씀. 연동할 때 정함 (PoC: 0.08 m)
@@ -349,8 +431,10 @@ class WaterParams:
 
     # 부력 계산용 복셀(작은 상자) 개수: 선체를 몸체 x·y·z 방향으로 각각 몇 칸으로 자를지.
     # 각 상자가 물에 얼마나 잠겼는지 더해서 부력을 구한다. 칸이 많을수록 정확하지만 느려진다.
-    # water.py 가 시작(bind) 때 Names.HULL_GEOM 의 크기를 읽어 상자를 직접 만든다.  [미현 / 제안]
-    VOXEL_RES = (8, 4, 4)
+    # water.py 가 시작(bind) 때 Names.HULL_GEOM 의 크기를 읽어 상자를 직접 만들고, 선체 모양 밖 칸은 버린다.
+    # 2026-11-19 A형으로 바꾸며 (8, 4, 4) → (30, 8, 4): 칸 0.05 × 0.15 m 라 홈(x +0.15, y ±0.45)·
+    #   뱃머리 시작(x +0.45) 경계가 칸 경계와 맞음. 남는 칸 약 460개 (상자 전체 960개 중)
+    VOXEL_RES = (30, 8, 4)
     # 선체를 속이 꽉 찬 덩어리로 본다 (갑판 위로 물이 들어차는 침수는 계산하지 않음).  [미현 / 제안]
     HULL_IS_SOLID = True
 
@@ -641,6 +725,32 @@ class Winch:
 
 
 # ─────────────────────────────────────────────────────────────
+# 9-1-1. 구명환 발사대 — 로봇 (동경). 2026-11-19 결정: 줄을 풀어 건네는 대신 구명환을 쏜다.
+#   실험 근거 (2026-11-19, 실험 폴더 launch.py): 줄 풀기 방식은 잔잔한 물에서 환이 손까지 안 감 (1.16 m 떨어짐).
+#   발사는 3 m 앞에서 손 0.04 m 옆에 떨어짐. 방향 ±10°·세기 ±10% 오차까지 잡을 수 있었고 ±20% 는 실패.
+# ─────────────────────────────────────────────────────────────
+class Launcher:
+    # 무엇: 발사 전 구명환 중심 위치 [m], 배 몸체 좌표. 홈 가운데 위, 환 아래면이 갑판 2 cm 위
+    # 이유: 홈(0.9 × 0.9)에 바깥지름 0.8 m 환이 다리에 닿지 않고 들어감
+    MOUNT_B = (-Hull.LENGTH / 2 + Hull.SLOT_DEPTH / 2, 0.0, Hull.HEIGHT / 2 + 0.075 + 0.02)
+    # 무엇: 발사 전 구명환 자세 (배 기준 쿼터니언 w x y z). 환 로컬 축 (x 구멍 축, y, z) → 배 (z, x, y)
+    #   환이 누워 있고, 로프 점(Lifebuoy.TOW_POINT_B)은 배 앞쪽(줄 묶는 점 쪽), 잡는 점(GRIP_L)은 뒤쪽(사람 쪽)
+    MOUNT_QUAT_B = (0.5, -0.5, -0.5, -0.5)
+    # 무엇: 발사 앙각 [도]. 35° 와 50° 모두 손 0.04 m 옆에 떨어짐 (실험). 낮을수록 빨리 도착
+    ANGLE_DEG = 35.0
+    # 무엇: 발사 때 줄 묶는 점 ↔ 사람 손 거리 [m] = 대략 발사 거리. 접근은 선미를 사람 쪽으로 두고 여기서 멈춤
+    # 이유: 실험값. 배 다리 끝이 사람에게서 약 2 m 떨어져 추진기가 사람 옆에 오지 않음 [동경 / 제안]
+    STAGING_GAP = 3.0
+    # 무엇: 구명환을 미는 시간 [s]. 이 동안 일정한 힘으로 밀고 같은 힘의 반동을 배가 받는다
+    # 이유: 힘은 ForceAccumulator 로만 (계약). 2.5 kg 을 약 4.8 m/s 로 → 약 240 N · 0.05 s. 실제 장치 미정
+    PUSH_SECONDS = 0.05
+    # 무엇: 겨누는 높이 = 환 중심이 이 높이 [m] (수면 기준)로 내려올 때 잡는 점이 손에 오도록
+    AIM_HEIGHT = 0.03
+    # 무엇: 발사할 때 윈치를 풀어 두는 길이 = 발사 거리 + 이 값 [m]. 날아가는 동안 줄이 환을 당기지 않게
+    ROPE_SLACK = 2.0
+
+
+# ─────────────────────────────────────────────────────────────
 # 9-2. 줄 모델 내부 설정 — 가영의 독립 구현용 시험 초안
 # ─────────────────────────────────────────────────────────────
 # 아래 값은 tendon 스프링·인장 감쇠 실험의 출발점일 뿐,
@@ -777,11 +887,11 @@ def _divide_or_none(numerator, *denominators):
 
 
 class Expect:
-    # 정수 흘수 [m] = MASS / (RHO_WATER · LENGTH · BEAM)  (직육면체 손 계산)
+    # 정수 흘수 [m] = MASS / (RHO_WATER · WATERPLANE_AREA)  (벽이 곧은 선체 손 계산. 상자면 L·B)
     # 흘수 = 가만히 떠 있을 때 배가 물에 잠기는 깊이.
     # 숫자를 직접 적지 않고 계산식으로 둔다 → 선체 질량·크기가 바뀌어도 정답값이 자동으로 따라감.
     # 필요한 값이 하나라도 아직 None 이면 DRAFT 도 None.
-    DRAFT = _divide_or_none(Hull.MASS, Physics.RHO_WATER, Hull.LENGTH, Hull.BEAM)
+    DRAFT = _divide_or_none(Hull.MASS, Physics.RHO_WATER, Hull.WATERPLANE_AREA)
     # 무엇: 시뮬레이션 흘수가 DRAFT 와 이만큼 [m] 차이 나도 "맞다"고 본다. 채연과 합의
     DRAFT_TOL = None
     # 무엇: 가만히 떠 있을 때 롤·피치(기울기)가 이 각도 [rad] 안이면 "평형"으로 본다
@@ -803,9 +913,10 @@ class Capsize:
     # 무엇: 배가 이 각도 [rad] 이상 기울면 "전복"으로 판정. 롤 = 좌우, 피치 = 앞뒤.
     # 사용: 로봇(판정), 태수 PhaseManager(판정 후 처리)
     # 이유: 잔잔한 물에서 기울기별 복원팔 GZ(= 복원 모멘트 ÷ 무게)를 잰 결과 (2026-11-15, 동경):
-    #       GZ 가 0 이 되는 각도(복원력 소실각) = roll 약 96~97°, pitch 약 92°.
+    #       GZ 가 0 이 되는 각도(복원력 소실각) = roll 약 96~97°, pitch 약 92° (직육면체).
+    #       A형(2026-11-19)은 roll 약 92.5°, pitch 약 92.9° → 90° 그대로 둠.
     #       그보다 조금 앞인 90° 로 둠 → 이 각도를 넘으면 스스로 못 돌아온다고 봄.
-    #       참고: 최대 GZ 는 roll 약 17 cm·pitch 약 48 cm (20~25°), 60° 에서도 roll GZ 약 12 cm 로 아직 강하게 일어섬.
+    #       참고(A형): GZ 는 roll 약 45 cm·pitch 약 37 cm (10~30°) 로 직육면체보다 훨씬 강하게 일어섬 (폭이 넓음).
     #       선체는 물이 안 들어오는 상자라 실제 배보다 낙관적 (갑판이 잠기는 roll 약 53° 이후 침수 없음).
     #       검증: tests/robot/test_robot.py test_capsize_limit_below_vanishing_stability
     ROLL_LIMIT = math.radians(90)    # [동경 / 제안]

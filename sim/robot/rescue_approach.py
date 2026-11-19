@@ -22,8 +22,15 @@ class RescueApproachSettings:
     # 모두 시연용 가정값. route_radius는 선체가 방향을 바꿀 공간을 포함한다.
     route_radius: float = 4.5
     staging_gap: float = 3.0
-    connection_gap: float = .7
+    # 줄 묶는 점 ↔ 구명환 연결점 거리. A형(2026-11-19)은 묶는 점이 홈 앞끝이라 다리가 그 뒤로 0.9 m 더 나옴
+    #   → 다리 끝에서 0.7 m (직육면체 때 선미에서 0.7 m 와 같은 여유) = 0.7 + 0.9. 로프 REST_LENGTH 2.0 보다 짧아 느슨
+    connection_gap: float = 1.6
     waypoint_tolerance: float = .5
+    # 바깥 경로(TRANSIT) 중간 경유점에서는 멈추지 않고 이 속도 [m/s] 로 지나간다. 마지막 경유점·대기 위치는
+    # 기존 정밀 정지(navigation)를 그대로 쓴다. 이유 (2026-11-19 측정): 경유점마다 감속해 접근 평균 0.24~0.34 m/s.
+    # [실험값 — 11/23 회의에서 확정]
+    transit_speed: float = 3.0   # A형 최고 속도 약 3.3 m/s (2026-11-19 측정)
+    transit_gain: float = 2.0    # 경유점까지 거리 × 이 값 = 원하는 속도 (멈추지 않게 크게)
     docking_speed: float = .3  # 마지막 후진 속도 .2 → .3 (2026-11-17)
     gap_tolerance: float = .15
     relative_speed_tolerance: float = .06
@@ -45,8 +52,12 @@ class RescueApproach:
     고정된 사람이 아닌 강체 부유 시험이며 전역 장애물 회피 계획기는 아니다.
     """
 
-    def __init__(self, world, robot, *, tow_heading=0., settings=None, navigation=None, target_site=None):
-        # target_site: 접근 목표 site 이름. 생략하면 구명환 로프 연결점 (기존 동작).
+    def __init__(self, world, robot, *, tow_heading=0., settings=None, navigation=None,
+                 target_site=None, victim_bodies=None):
+        """target_site: 다가갈 기준 site 이름 (기본 = 떠 있는 구명환의 로프 점).
+        배가 구명환을 싣고 가는 발사 시나리오는 사람 손 site 를 주고, 실린 환은 victim_bodies 에서 뺀다.
+        victim_bodies: 선체와의 간격을 검사할 body 이름들 (기본 = 사람·구명환).
+        """
         import mujoco
 
         if robot not in world.parts or robot.body_id is None:
@@ -57,19 +68,23 @@ class RescueApproach:
             raise ValueError('견인 방향은 유한한 각도여야 합니다.')
         self.target_heading = math.atan2(math.sin(tow_heading), math.cos(tow_heading))
         try:
-            self.ring_site = world.model.site(config.Names.LIFEBUOY_TOW_SITE if target_site is None
-                                              else target_site).id
+            # ring_site = 다가갈 기준 site (이름은 기존 API 호환. 발사 시나리오에서는 사람 손)
+            self.ring_site = world.model.site(target_site or config.Names.LIFEBUOY_TOW_SITE).id
             self.stern_site = world.model.site(config.Names.TOW_POINT_SITE).id
-            human_body = world.model.body(config.Names.HUMAN_BODY).id
+            if victim_bodies is None:
+                victim_bodies = (config.Names.HUMAN_BODY, int(world.model.site_bodyid[self.ring_site]))
+            victim_ids = {name if isinstance(name, int) else world.model.body(name).id for name in victim_bodies}
         except KeyError as error:
             raise ValueError('구명환·선미 연결점이 먼저 조립되어야 합니다.') from error
         if world.model.site_bodyid[self.stern_site] != robot.body_id:
             raise ValueError('선미 연결점은 로봇에 속해야 합니다.')
         self.navigation = ApproachSettings() if navigation is None else navigation
         self.direction = np.array([math.cos(self.target_heading), math.sin(self.target_heading)])
-        self._stern_b = world.model.site_pos[self.stern_site].copy()
-        if self._stern_b[0] >= 0:
-            raise ValueError('선미 연결점은 로봇의 뒤쪽에 있어야 합니다.')
+        # 선미 연결점 위치는 무게중심 기준 (PhaseManager 가 무게중심을 목표에 맞추므로)
+        self._stern_b = world.model.site_pos[self.stern_site] - world.model.body_ipos[robot.body_id]
+        # A형은 줄 묶는 점이 홈 앞끝(원점보다 앞, x +0.15)이라 "x < 0" 대신 "선체 앞끝보다 뒤" 만 확인한다
+        if world.model.site_pos[self.stern_site][0] >= config.Hull.LENGTH / 2:
+            raise ValueError('선미 연결점은 선체 앞끝보다 뒤에 있어야 합니다.')
         self._staging_distance = self.settings.staging_gap - self._stern_b[0]
         if self.settings.route_radius < self._staging_distance:
             raise ValueError('바깥 경로 반지름은 대기 위치 거리 이상이어야 합니다.')
@@ -79,9 +94,8 @@ class RescueApproach:
                                        target_heading=self.target_heading, settings=self.navigation)
         self.stage = RescueStage.TRANSIT
         self._ready_since = None
-        victim_bodies = {human_body, int(world.model.site_bodyid[self.ring_site])}
         self.victim_geoms = tuple(i for i in range(world.model.ngeom)
-                                  if world.model.geom_bodyid[i] in victim_bodies)
+                                  if world.model.geom_bodyid[i] in victim_ids)
         self._clearance = self.clearance()
         self.minimum_observed_clearance = self._clearance
         self._next_clearance_time = float(world.data.time)
@@ -104,12 +118,11 @@ class RescueApproach:
         self._last_time = float(self.world.data.time)
 
     def clearance(self):
-        """현재 hull과 사람·구명환 사이 최소 표면 간격. 파생 위치 갱신 후 호출한다."""
+        """현재 배 충돌 형상과 사람·구명환 사이 최소 표면 간격. 파생 위치 갱신 후 호출한다."""
         import mujoco
 
-        return min(mujoco.mj_geomDistance(self.world.model, self.world.data,
-                                         self.robot.geom_id, geom, 10., None)
-                   for geom in self.victim_geoms)
+        return min(mujoco.mj_geomDistance(self.world.model, self.world.data, boat, geom, 10., None)
+                   for boat in self.robot.collision_geom_ids for geom in self.victim_geoms)
 
     def check_clearance(self):
         """현재 파생 위치에서 간격을 제어 주기로 검사한다. 견인 단계에서도 재사용한다."""
@@ -123,7 +136,7 @@ class RescueApproach:
                 raise RuntimeError('선체와 사람·구명환의 간격이 너무 작아 접근 시험을 중단했습니다.')
 
     def _plan_route(self):
-        offset = self.world.data.xpos[self.robot.body_id, :2] - self.world.data.site_xpos[self.ring_site, :2]
+        offset = self.world.data.xipos[self.robot.body_id, :2] - self.world.data.site_xpos[self.ring_site, :2]
         radius = float(np.linalg.norm(offset))
         if radius < self.settings.route_radius:
             raise ValueError('이 시험은 배를 구명환에서 route_radius 이상 떨어뜨려 시작해야 합니다.')
@@ -152,6 +165,29 @@ class RescueApproach:
                                  [math.sin(angle), math.cos(angle)]])
         stern_offset = yaw_rotation @ (rotation @ self._stern_b)[:2]
         return self.world.data.site_xpos[self.ring_site, :2] + gap * self.direction - stern_offset
+
+    def _passed_waypoint(self):
+        """중간 경유점을 사람 둘레 각도로 이미 지났는지. 마지막 경유점은 정확히 가야 하므로 False.
+
+        빠르게 달리면 회전 반경(속도 ÷ 최대 회전 속도)이 waypoint_tolerance 보다 커서 경유점 주위를 맴돈다
+        (2026-11-19, 1.5 m/s 에서 확인). 각도로 지났으면 다음 경유점으로 넘긴다.
+        """
+        if self._route_index + 1 >= len(self._angles):
+            return False
+        offset = self.world.data.xipos[self.robot.body_id, :2] - self.world.data.site_xpos[self.ring_site, :2]
+        angle = math.atan2(offset[1], offset[0])
+        waypoint = self._angles[self._route_index]
+        turn = self._angles[-1] - self._angles[0]
+        ahead = math.atan2(math.sin(angle - waypoint), math.cos(angle - waypoint))
+        return ahead * math.copysign(1., turn) >= 0
+
+    def _set_transit_speed(self):
+        """중간 경유점은 빠르게 지나가고, 마지막 경유점부터는 정밀 정지 설정으로 감속한다."""
+        if self.stage != RescueStage.TRANSIT:
+            return
+        last = self._route_index + 1 >= len(self._angles)
+        self.controller.settings = (self.navigation if last else replace(
+            self.navigation, max_speed=self.settings.transit_speed, distance_gain=self.settings.transit_gain))
 
     def _route_target(self):
         angle = self._angles[self._route_index]
@@ -184,12 +220,16 @@ class RescueApproach:
         self.check_clearance()
         # 이 제어기는 물리 상태를 리셋하거나 사람 위치를 직접 바꾸지 않는다.
         if self.stage == RescueStage.TRANSIT:
+            self._set_transit_speed()
             self.controller.target_xy[:] = self._route_target()
-            if np.linalg.norm(self.controller.target_xy - world.data.xpos[self.robot.body_id, :2]) < self.settings.waypoint_tolerance:
+            near = np.linalg.norm(self.controller.target_xy - world.data.xipos[self.robot.body_id, :2]) < self.settings.waypoint_tolerance
+            if near or self._passed_waypoint():
                 if self._route_index + 1 < len(self._angles):
                     self._route_index += 1
                 else:
                     self.stage = RescueStage.ALIGN_STERN
+                    self.controller.settings = self.navigation
+                self._set_transit_speed()
                 self.controller.reset()
         if self.stage == RescueStage.ALIGN_STERN:
             self.controller.target_xy[:] = self._body_target(self.settings.staging_gap)

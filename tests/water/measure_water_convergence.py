@@ -21,8 +21,7 @@ from sim.world.world import advance_world, build_world
 
 
 def measure(resolution, timestep, seconds, tail_seconds):
-    theoretical_draft = config.Hull.MASS / (
-        config.Physics.RHO_WATER * config.Hull.LENGTH * config.Hull.BEAM)
+    theoretical_draft = config.Expect.DRAFT
     start_z = (config.WaterParams.SURFACE_Z + config.Hull.HEIGHT / 2
                - theoretical_draft + .05)
     steps = round(seconds / timestep)
@@ -45,7 +44,7 @@ def measure(resolution, timestep, seconds, tail_seconds):
                 origin_draft = (config.WaterParams.SURFACE_Z + config.Hull.HEIGHT / 2
                                 - world.data.xpos[robot.body_id, 2])
                 # volume은 마지막 스텝 외력 계산 시점(적분 직전)의 값이다.
-                volume_draft = water.submerged_volume / (config.Hull.LENGTH * config.Hull.BEAM)
+                volume_draft = water.submerged_volume / config.Hull.WATERPLANE_AREA
                 pitch = np.degrees(np.arctan2(-rotation[2, 0],
                                               np.hypot(rotation[0, 0], rotation[1, 0])))
                 samples.append((origin_draft, volume_draft, pitch))

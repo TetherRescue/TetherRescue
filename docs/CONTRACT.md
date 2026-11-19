@@ -235,7 +235,8 @@ small은 ANSUR II 여성 하위 5%(152.5cm·51.3kg), large는 남성 상위 5%(1
 
 ## 부력·물 저항·수상 견인 시험 (2026-11-13)
 
-- `Water.bind`는 boat의 hull 크기를 모델에서 읽고 `VOXEL_RES`로 복셀화합니다.
+- `Water.bind`는 boat의 hull 크기를 모델에서 읽고 `VOXEL_RES`로 복셀화한 뒤,
+  `config.hull_contains` 밖(A형의 홈·뱃머리 양옆) 칸을 버립니다 (2026-11-19).
   선체 질량·관성을 수정하지 않습니다. 부가질량은 surge·sway만 구현되어 있고 기본값은 꺼져 있습니다
   (`WaterParams.ADDED_MASS_ENABLED = False`, 켤지는 계수 근거 확인 후 팀 회의에서 결정).
 - 부력은 `rho * |model.opt.gravity| * 잠긴 부피`입니다. 각 복셀의 부분 침수와
@@ -260,7 +261,8 @@ small은 ANSUR II 여성 하위 5%(152.5cm·51.3kg), large는 남성 상위 5%(1
 
 ## 목표 접근·정지 제어 첫 단계 (2026-11-13)
 
-- `PhaseManager(world, robot, target_xy, target_heading=...)`는 선체 원점의 월드 xy와 yaw를 목표로 합니다.
+- `PhaseManager(world, robot, target_xy, target_heading=...)`는 배 무게중심(`data.xipos`)의 월드 xy와 yaw를
+  목표로 합니다 (2026-11-19 변경: 원점 → 무게중심. 제자리 회전 중심이라 정착 중 원을 그리지 않음).
   `step()`은 현재 상태 갱신 → 명령 갱신 → acc.reset → parts 순서 add_forces → apply → mj_step →
   상태 갱신을 수행합니다. parts 순서는 world 조립 순서를 따르며 시험은 Water → Robot입니다.
 - 제어 갱신은 Sim.CONTROL_HZ, 물리 스텝은 Sim.TIMESTEP을 유지합니다.
@@ -286,15 +288,15 @@ small은 ANSUR II 여성 하위 5%(152.5cm·51.3kg), large는 남성 상위 5%(1
 - `RescueApproach`는 기존 PhaseManager를 사용하며 TRANSIT → ALIGN_STERN → BACK_IN → READY를 관리합니다.
   물리 스텝은 PhaseManager.step에서 한 번만 실행합니다. 사람·배 위치를 직접 보정하거나 리셋하지 않습니다.
 - 목표는 현재 `lifebuoy_tow_point`의 월드 xy와 지정한 견인 방향입니다.
-  선미 site의 로컬 오프셋과 현재 roll/pitch를 반영해 배 원점의 목표를 계산합니다.
+  선미 site의 무게중심 기준 오프셋과 현재 roll/pitch를 반영해 배 무게중심의 목표를 계산합니다.
   큰 기울기·전복 상황에서의 연결은 이번 범위에 포함하지 않습니다.
 - 현재 형상의 시험용 원호 경유점(반지름 4.5m, 최대 각 간격 30도)을 따라 이동하고,
   선미 간격 3m에서 최종 방향을 정렬한 뒤 최대 목표 속도 0.2m/s로 후진 접근합니다.
-  초기 선체 원점과 구명환 site 거리는 경로 반지름 이상이어야 합니다.
-- READY에는 PhaseManager의 도착 조건, 실제 3D site 간격 0.7m±0.15m,
+  초기 배 무게중심과 구명환 site 거리는 경로 반지름 이상이어야 합니다.
+- READY에는 PhaseManager의 도착 조건, 실제 3D site 간격 1.6m±0.15m(A형: 다리 끝에서 0.7m),
   site 상대속도 0.06m/s 이하가 필요합니다. 추가로 1초 동안 조건을 유지합니다.
   조건이 깨지면 BACK_IN으로 돌아가며, 대기 중에도 작은 위치·속도 보정을 계속합니다.
-- 선체 hull과 사람·구명환의 모든 geom 사이 거리를 제어 주기로 검사합니다.
+- 배 충돌 형상(`Robot.collision_geom_ids`)과 사람·구명환의 모든 geom 사이 거리를 제어 주기로 검사합니다.
   0.1m보다 작으면 추진 명령을 0으로 바꾸고 오류로 시험을 중단합니다.
   접촉 반응·연속 충돌 검출을 대신하는 기능은 아닙니다.
 - `view_rescue --approach-only`는 부력·물 저항이 켜진 잔잔한 물에서 실행하며 tendon은 생성하지 않습니다.
@@ -445,6 +447,43 @@ small은 ANSUR II 여성 하위 5%(152.5cm·51.3kg), large는 남성 상위 5%(1
   제어 갱신·반복 리셋은 호출 측의 책임입니다. 기존 PhaseManager/Watchdog의 단계별 검사 순서는 유지합니다.
 - `rope_visual.draw_rope`는 물리 상태를 변경하지 않고 현재 장력을 이용해 로프를 표시합니다.
   `clear=True`면 기존 표시를 비우며, 미연결 로프는 표시하지 않습니다.
+
+## A형 선체 (2026-11-19)
+
+- `Hull.SHAPE = "a_frame"`: 감싸는 상자 1.5 × 1.2 × 0.2m에서 선미 홈 0.9 × 0.9m와 뱃머리 양옆을 뺀 모양.
+  다리 폭 0.15m, 뱃머리 x 0.45~0.75m에서 반폭 0.6 → 0.2m. 모양 판정은 `config.hull_contains` 한 곳.
+- `Hull.WATERPLANE_AREA`(0.87m²)·`WATERPLANE_CENTER_X`·`WATERPLANE_INERTIA`를 모양에서 계산하며,
+  흘수(`Expect.DRAFT` ≈ 0.022m)·heave 세기·복원력은 L·B 대신 이 값을 씁니다. 상자면 예전 식과 같습니다.
+- `Robot`은 `hull` geom을 투명·접촉 없음(VISUAL 그룹)의 부력 기준 상자로 두고, 실제 충돌 형상
+  `hull_leg_l/r`·`hull_bridge`·`hull_bow`를 PHYSICS 그룹·`Contacts.BOAT`로 만듭니다.
+- 껍데기 무게중심은 모양 중심(x ≈ +0.19m)이며, 부품 배치로 배 무게중심도 x ≈ +0.19m에 맞춰 수평으로 뜹니다.
+- 줄 묶는 점 `Hull.TOW_POINT_B = (0.15, 0, 0.1)` = 홈 앞끝 가운데. 추진기 y ±0.525m(다리 가운데).
+- 구명환은 아래 발사 시나리오에서 홈 위 발사대에 실립니다. 기존 `RescueMission`은 착용 구명환 그대로입니다.
+
+## 구명환 발사 (2026-11-19)
+
+- `sim/robot/launcher.py` `Launcher`(로봇): build 때 구명환 시작 자리를 배 기준 `Launcher.MOUNT_B`·`MOUNT_QUAT_B`로
+  바꾸고, 배 ↔ 구명환 weld `Names.LAUNCHER_MOUNT_EQ`(처음 켜짐)를 만듭니다. `Lifebuoy(attached=False)`가 필요합니다.
+- `aim(data, target_w)`: 공기 저항 없는 포물선(앙각 `Launcher.ANGLE_DEG`)으로, 구명환 잡는 점이 목표에 떨어지는
+  환 중심 속도를 구합니다. `fire()`: weld를 끄고 `PUSH_SECONDS` 동안 일정한 힘을 `acc`로 환에, 반동을 배의
+  발사대 점에 겁니다. qpos·qvel을 직접 바꾸지 않습니다.
+- `Robot(winch=True).release_winch(length)`: 줄 기준 길이를 바로 늘리고 `delivery_ready`를 켭니다. 감지는 않습니다.
+- `Robot(yaw=...)`: 처음 방향. 배 기준으로 놓이는 부품(발사대)을 위해 build 때 몸체 자세로 넣습니다.
+- `RescueApproach(target_site=..., victim_bodies=...)`: 다가갈 기준 site와 간격 검사 대상을 바꿀 수 있습니다.
+  기본값은 이전과 같습니다(구명환 로프 점, 사람·구명환).
+- `sim/world/launch_mission.py` `LaunchMission`: APPROACH → LAUNCH → GRAB → TOW → COMPLETE.
+  LAUNCH·GRAB은 Watchdog의 `ATTACH` 시간 제한(기본 20초)을 씁니다. 빗나가 못 잡으면 시간 초과로 멈춥니다(재발사 없음).
+  잡기는 `HumanGrasp`(reach 0.45m, 상대 속력 0.25m/s) 고정 잡기 근사입니다.
+
+## 접근 빠르게·견인 안전 속도 (2026-11-19, 실험값 — 11/23 회의에서 확정)
+
+- `RescueApproachSettings.transit_speed` 3.0m/s·`transit_gain` 2.0: 바깥 경로 중간 경유점에서는 멈추지 않고 지나갑니다.
+  사람 둘레 각도로 경유점을 이미 지났으면 다음으로 넘어갑니다(빠르면 회전 반경이 허용 반경보다 커서 맴돌았음).
+  마지막 경유점·대기 위치는 기존 정밀 정지 설정을 씁니다.
+- `ApproachSettings.max_yaw_torque` 10 → 25N·m, `max_yaw_speed` 0.8 → 1.5rad/s: A형 추진기 간격(1.05m)에 맞춤.
+- `LaunchSettings.stop_*`: 발사 자리는 0.3m·15°·0.2초 유지로 멈춥니다. 발사대가 손을 향해 다시 겨눕니다.
+- 발사 시나리오 견인 속도 상한 0.7m/s (기존 착용 시나리오는 0.4m/s 그대로).
+- 측정 (잔잔한 물): 발사 시각 25.7~63.0초 → 12.5~26.4초, 착수 오차 0.04~0.05m 그대로.
 
 ## 최신 main 선체 통합 (2026-11-13)
 

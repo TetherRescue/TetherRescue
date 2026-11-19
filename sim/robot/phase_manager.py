@@ -28,10 +28,12 @@ class ApproachSettings:
     position_gain: float = 30.0  # 정지 유지 N/m
     heading_gain: float = 1.4  # 목표 yaw 속도 / 방향 오차
     yaw_speed_gain: float = 12.0  # N·m / (rad/s)
-    max_yaw_speed: float = .8
+    max_yaw_speed: float = 1.5  # .8 → 1.5 (2026-11-19 A형, 실험값 — 11/23 회의에서 확정)
     max_force: float = 60.0
     max_brake_force: float = 30.0
-    max_yaw_torque: float = 10.0  # 추진기 한계 ≈ 12.6 N·m (lever 0.36 m × 70 N / 2)
+    # 추진기 한계 ≈ 36.8 N·m (A형 lever 1.05 m × 70 N / 2). 직육면체 때 12.6 이라 10 이었음.
+    # 10 → 25 (2026-11-19, 실험값 — 11/23 회의에서 확정): 선미 정렬 회전이 빨라짐
+    max_yaw_torque: float = 25.0
     capture_radius: float = .05
     position_tolerance: float = .20
     reapproach_radius: float = .21
@@ -110,7 +112,10 @@ class PhaseManager:
         rotation = data.xmat[self.robot.body_id].reshape(3, 3)
         yaw = math.atan2(rotation[1, 0], rotation[0, 0])
         velocity, omega = body_velocity_w(model, data, self.robot.body_id)
-        error = self.target_xy - data.xpos[self.robot.body_id, :2]
+        # 목표에 맞추는 점 = 무게중심(xipos). 차동 추력으로 제자리에서 돌면 배는 무게중심 둘레로 돈다.
+        # 원점(상자 중심)으로 맞추면 A형(무게중심이 원점 앞 0.19 m)은 돌 때마다 원점이 0.38 m 원을 그려
+        # 정착 → 재접근을 끝없이 반복한다 (2026-11-19 측정).
+        error = self.target_xy - data.xipos[self.robot.body_id, :2]
         return dict(distance=float(np.linalg.norm(error)), speed=float(np.linalg.norm(velocity[:2])),
                     heading_error=_angle(self.target_heading - yaw), yaw_speed=float(omega[2]),
                     yaw=yaw, error=error, velocity=velocity[:2], phase=self.phase.value,

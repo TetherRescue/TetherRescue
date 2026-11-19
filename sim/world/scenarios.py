@@ -165,7 +165,7 @@ class ContactDemo:
         self.speed, self.thrust = float(speed), float(thrust)
         yaw = math.radians(heading_deg)
         self.direction = np.array([math.cos(yaw), math.sin(yaw), 0.])
-        draft = config.Hull.MASS / (config.Physics.RHO_WATER * config.Hull.LENGTH * config.Hull.BEAM)
+        draft = config.Expect.DRAFT
         start = -(config.Hull.LENGTH / 2 + 2.) * self.direction   # 충분히 멀리 둔 뒤 아래에서 간격을 맞춘다
         self.robot = Robot(position=(start[0], start[1],
                                      config.WaterParams.SURFACE_Z + config.Hull.HEIGHT / 2 - draft))
@@ -181,7 +181,9 @@ class ContactDemo:
             data.qpos[address:address + 7] = qpos
         mujoco.mj_forward(model, data)
 
-        self.boat_geoms = {g for g in range(model.ngeom) if model.geom_bodyid[g] == self.robot.body_id}
+        # 실제로 부딪히는 배 형상만 (A형의 투명 감싸는 상자는 접촉이 꺼져 있어 겹쳐도 의미 없음)
+        self.boat_geoms = {g for g in range(model.ngeom)
+                           if model.geom_bodyid[g] == self.robot.body_id and model.geom_contype[g]}
         self.victim_geoms = [g for g in range(model.ngeom) if model.geom_group[g] == config.Groups.PHYSICS
                              and model.geom_contype[g] and g not in self.boat_geoms]
         # 배를 진행 방향으로 옮겨 실제 최소 간격을 gap에 맞춘다. 다리처럼 비스듬히 물속으로 내려간

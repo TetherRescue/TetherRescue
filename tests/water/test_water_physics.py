@@ -29,8 +29,8 @@ def applied_loads(world, water):
 
 
 @pytest.mark.parametrize('height,volume', [
-    (1., 0.), (-1., config.Hull.LENGTH * config.Hull.BEAM * config.Hull.HEIGHT),
-    (0., config.Hull.LENGTH * config.Hull.BEAM * config.Hull.HEIGHT / 2),
+    (1., 0.), (-1., config.Hull.WATERPLANE_AREA * config.Hull.HEIGHT),
+    (0., config.Hull.WATERPLANE_AREA * config.Hull.HEIGHT / 2),
     (config.Hull.HEIGHT / 2 - config.Expect.DRAFT, config.Hull.MASS / config.Physics.RHO_WATER),
 ])
 def test_archimedes_force_matches_analytic_box(height, volume):
@@ -38,9 +38,13 @@ def test_archimedes_force_matches_analytic_box(height, volume):
     loads = applied_loads(world, water)
     np.testing.assert_allclose(loads[boat.body_id, :3],
                                [0, 0, volume * config.Physics.RHO_WATER * config.Physics.GRAVITY], atol=1e-9)
-    # 새 선체는 COM_x가 0이 아니므로 부력 중심과의 간격만큼 pitch 토크가 생긴다.
-    expected_torque = np.cross(-np.asarray(config.Hull.COM), [0., 0., volume * config.Physics.RHO_WATER * config.Physics.GRAVITY])
-    np.testing.assert_allclose(loads[boat.body_id, 3:], expected_torque, atol=1e-9)
+    # 부력 중심(똑바로 뜨면 x = 수면 넓이 중심)과 COM 의 x 간격만큼 pitch 토크가 생긴다 (A형은 약 4 mm).
+    buoyancy_center = np.array([config.Hull.WATERPLANE_CENTER_X, 0., 0.])
+    expected_torque = np.cross(buoyancy_center - np.asarray(config.Hull.COM),
+                               [0., 0., volume * config.Physics.RHO_WATER * config.Physics.GRAVITY])
+    # 뱃머리 비스듬한 면은 복셀 계단 근사라 부력 중심이 1 mm 안쪽으로 어긋날 수 있음 → 그만큼 허용
+    lever_tol = 1e-3 * volume * config.Physics.RHO_WATER * config.Physics.GRAVITY
+    np.testing.assert_allclose(loads[boat.body_id, 3:], expected_torque, atol=lever_tol + 1e-9)
 
 
 def test_dry_body_has_no_water_drag_or_torque():
