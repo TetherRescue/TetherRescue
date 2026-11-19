@@ -17,7 +17,7 @@ STOWED, PAYING_OUT, PAID_OUT = 'STOWED', 'PAYING_OUT', 'PAID_OUT'
 class Robot:
     REQUIRES = {}  # 예: {"max_dt": 0.004}
 
-    def __init__(self, surface_height=None, *, position=None, tow_point_b=None, winch=False):
+    def __init__(self, surface_height=None, *, position=None, yaw=0.0, tow_point_b=None, winch=False):
         """surface_height: 수면 높이 함수 (x, y, t) -> z, 예: Water().wave_height. x, y 는 배열로 받음.
 
         None 이면 1주차 가정 "노즐은 항상 물속" (WaterAPI.USE_IN_WEEK1 = False).
@@ -33,6 +33,9 @@ class Robot:
         self.steer = 0.0      # 조향 명령 (+ 왼쪽으로 돎)
         self.surface_height = surface_height
         self.position = None if position is None else self._vector(position, 'position')
+        if not np.isfinite(yaw):
+            raise ValueError('yaw는 유한한 각도여야 합니다.')
+        self.yaw = float(yaw)   # 처음 방향 [rad]. build 때 몸체 자세로 넣음 (발사대처럼 배 기준으로 놓는 부품용)
         self.tow_point_b = None if tow_point_b is None else self._vector(tow_point_b, 'tow_point_b')
 
     @staticmethod
@@ -91,7 +94,8 @@ class Robot:
 
         draft = config.Expect.DRAFT or 0.0
         start_z = config.WaterParams.SURFACE_Z + Hull.HEIGHT / 2 - draft   # 바닥이 수면 아래 draft
-        body = spec.worldbody.add_body(name=Names.BOAT_BODY, pos=(0.0, 0.0, start_z) if self.position is None else self.position)
+        body = spec.worldbody.add_body(name=Names.BOAT_BODY, pos=(0.0, 0.0, start_z) if self.position is None else self.position,
+                                       quat=(np.cos(self.yaw / 2), 0.0, 0.0, np.sin(self.yaw / 2)))
         body.add_freejoint(name=Names.BOAT_FREE)
 
         # 질량은 geom 밀도로 자동 계산하지 않고 config 값을 그대로 넣음 (물의 흘수 정답값과 같은 숫자여야 함)
@@ -224,6 +228,17 @@ class Robot:
             return False
         self.delivery_state = PAYING_OUT
         return True
+
+    def release_winch(self, length):
+        """윈치를 자유롭게 풀어 줄 기준 길이를 length 로 바로 늘린다 (구명환 발사용). 다 풀린 것으로 본다.
+
+        발사한 환이 날아가는 동안 줄이 당기지 않게 한다. 감는 것은 하지 않는다 (지금보다 짧으면 ValueError).
+        """
+        self._check_winch(self._model)
+        if not np.isfinite(length) or length < self.rope_length(self._model):
+            raise ValueError('풀 길이는 지금 줄 길이 이상의 유한한 값이어야 합니다.')
+        self._set_rope_length(self._model, float(length))
+        self.delivery_state = PAID_OUT
 
     @property
     def delivery_ready(self):
