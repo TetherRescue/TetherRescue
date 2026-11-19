@@ -246,7 +246,9 @@ def test_positive_steering_turns_left_and_mixing_saturates():
     world, robot = make_robot()
     robot.set_command(forward=1, steering=1)
     advance(world)
-    assert body_velocity_w(world.model, world.data, robot.body_id)[0][0] / world.model.opt.timestep == pytest.approx(config.Thruster.MAX_FORWARD / config.Hull.MASS)
+    # 원점 속도라 첫 스텝의 회전(ω × 원점−무게중심)이 아주 조금 섞임 (A형은 무게중심이 원점 앞 0.19 m) → 1e-4
+    assert body_velocity_w(world.model, world.data, robot.body_id)[0][0] / world.model.opt.timestep == pytest.approx(
+        config.Thruster.MAX_FORWARD / config.Hull.MASS, rel=1e-4)
 
 
 @pytest.mark.parametrize('value', [float('nan'), float('inf')])
@@ -389,3 +391,77 @@ def test_winch_requires_rope_and_flag():
         Robot().pay_out()
     with pytest.raises(AssertionError):   # 로프(tendon) 없이 winch=True 면 bind 에서 멈춤
         build_world(parts=[Robot(winch=True)], gravity=0)
+
+
+# ─────────────────────────────────────────────────────────────
+# A형 선체 (2026-11-19)
+# ─────────────────────────────────────────────────────────────
+from sim.robot.robot import A_FRAME_GEOMS  # noqa: E402
+
+
+def test_a_frame_collision_geoms_replace_box():
+    # 감싸는 상자는 부력 기준일 뿐 부딪히지 않고, 다리·연결부·뱃머리가 실제로 부딪힌다
+    if Hull.SHAPE != "a_frame":
+        pytest.skip("A형 선체 시험")
+    model, _ = _compile()
+    box = _id(model, mujoco.mjtObj.mjOBJ_GEOM, Names.HULL_GEOM)
+    assert (model.geom_contype[box], model.geom_conaffinity[box]) == (0, 0)
+    assert model.geom_group[box] == config.Groups.VISUAL
+    for name in A_FRAME_GEOMS:
+        g = _id(model, mujoco.mjtObj.mjOBJ_GEOM, name)
+        assert model.geom_group[g] == config.Groups.PHYSICS
+        assert (model.geom_contype[g], model.geom_conaffinity[g]) == (config.Contacts.BOAT, config.Contacts.BOAT_AFFINITY)
+
+
+def test_a_frame_collision_geoms_cover_hull_shape():
+    # 충돌 형상(위에서 본 모양)과 물이 쓰는 모양(hull_contains)이 같아야 함: 격자 점마다 비교
+    if Hull.SHAPE != "a_frame":
+        pytest.skip("A형 선체 시험")
+    model, data = _compile()
+    xs = np.linspace(-Hull.LENGTH / 2 + .01, Hull.LENGTH / 2 - .01, 60)
+    ys = np.linspace(-Hull.BEAM / 2 + .01, Hull.BEAM / 2 - .01, 50)
+    points = np.array([(x, y, 0.) for x in xs for y in ys])
+    geoms = [_id(model, mujoco.mjtObj.mjOBJ_GEOM, n) for n in A_FRAME_GEOMS]
+    # 몸체 원점이 월드 원점·회전 없음이 되도록 옮긴 뒤 점-형상 거리로 안/밖 판정 (작은 구를 점으로 사용)
+    data.qpos[:3], data.qpos[3:7] = 0, (1, 0, 0, 0)
+    mujoco.mj_forward(model, data)
+    inside_geoms = []
+    for p in points:
+        local = False
+        for g in geoms:
+            size, pos = model.geom_size[g], data.geom_xpos[g]
+            if model.geom_type[g] == mujoco.mjtGeom.mjGEOM_BOX:
+                local |= bool(np.all(np.abs(p - pos) <= size))
+            else:   # 뱃머리 사다리꼴: x 구간 안에서 반폭이 선형으로 줄어듦
+                t = (p[0] - Hull.BOW_START_X) / (Hull.LENGTH / 2 - Hull.BOW_START_X)
+                half = Hull.BEAM / 2 - t * (Hull.BEAM / 2 - Hull.BOW_TIP_HALF_BEAM)
+                local |= bool(0 <= t <= 1 and abs(p[1]) <= half)
+        inside_geoms.append(local)
+    np.testing.assert_array_equal(np.array(inside_geoms), config.hull_contains(points))
+
+
+def test_slot_fits_lifebuoy_and_tow_point_is_at_slot_front():
+    # 홈 폭 > 구명환 바깥지름, 줄 묶는 점 = 홈 앞끝 가운데 (구명환이 홈 가운데로 끌려 나감)
+    if Hull.SHAPE != "a_frame":
+        pytest.skip("A형 선체 시험")
+    outer = 2 * (config.Lifebuoy.CENTERLINE_RADIUS + config.Lifebuoy.TUBE_RADIUS)
+    assert Hull.SLOT_WIDTH > outer
+    slot_front = -Hull.LENGTH / 2 + Hull.SLOT_DEPTH
+    assert Hull.TOW_POINT_B[:2] == pytest.approx((slot_front, 0.))
+    assert not config.hull_contains(np.array([slot_front - .01, 0., 0.]))   # 바로 뒤는 비어 있음 (홈)
+    assert config.hull_contains(np.array([slot_front + .01, 0., 0.]))       # 바로 앞은 연결부
+
+
+def test_center_of_mass_sits_over_center_of_buoyancy():
+    # 무게중심이 수면 넓이 중심(똑바로 뜬 배의 부력 중심) 위에 있어야 앞뒤로 기울지 않고 수평으로 뜬다
+    assert Hull.COM[0] == pytest.approx(Hull.WATERPLANE_CENTER_X, abs=0.01)
+    assert Hull.COM[1] == pytest.approx(0., abs=1e-12)
+
+
+def test_camera_sits_on_bridge_center():
+    # 카메라는 연결부 가운데 (뱃머리보다 덜 흔들림, 2026-11-19 실험)
+    if Hull.SHAPE != "a_frame":
+        pytest.skip("A형 선체 시험")
+    x, y, z = Sensors.CAMERA_POS_B
+    assert -Hull.LENGTH / 2 + Hull.SLOT_DEPTH < x < Hull.BOW_START_X and y == 0
+    assert z > Hull.HEIGHT / 2
