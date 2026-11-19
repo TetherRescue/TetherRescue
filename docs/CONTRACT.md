@@ -60,7 +60,7 @@
   표에 없는 그룹, 접촉이 켜진 VISUAL·SENSOR geom, 표에 없는 (contype, conaffinity) 조합이 있으면 조립을 중단합니다.
   MjSpec 기본값(group 0, contype 1, conaffinity 1)을 그대로 둔 geom도 여기서 걸리므로 새 형상은 반드시 지정합니다.
 - 이 표를 바꾸는 PR에는 가영 + 해당 형상 담당(배: 동경, 수면 표시: 미현)을 태그합니다.
-- 실제 충돌 시험(`tests/test_contact.py`, 2026-11-16): 구명환 없이 물에 자리 잡은 사람에 배가 발·옆·머리 쪽에서
+- 실제 충돌 시험(`tests/world/test_contact.py`, 2026-11-16): 구명환 없이 물에 자리 잡은 사람에 배가 발·옆·머리 쪽에서
   1 m/s로 부딪히면 겹침 최대 3.0mm, 사람 속도 변화는 완전 탄성 한계 이내(0.22 / 0.44 m/s)입니다.
   최대 추력으로 5초 밀어도 겹침 4mm 이하이며 경고·NaN이 없습니다. 옆에서 밀면 배가 마찰로 회전할 수 있는데,
   이는 관통이 아닌 정상 물리입니다. 현재 solref·solimp는 조정하지 않습니다.
@@ -125,7 +125,7 @@
 ## 구명환 — 형상·로프 연결점 시험 구현 (가영)
 
 - 구조 요구: 배 선미의 `tow_point` → 로프 → 구명환. 사람은 몸통을 환 안에 넣고 팔을 밖으로 둡니다.
-- `sim/lifebuoy.py`는 yz 평면의 원을 캡슐 12개로 근사한 하나의 강체를 만듭니다.
+- `sim/world/lifebuoy.py`는 yz 평면의 원을 캡슐 12개로 근사한 하나의 강체를 만듭니다.
   가운데 구멍은 실제로 열려 있으며, 물리 형상도 하나의 볼록 덩어리로 합치지 않습니다.
 - `config.Lifebuoy`의 시험값: 중심선 반지름 0.325m, 튜브 반지름 0.075m, 총질량 2.5kg (IMO LSA Code 구명환 최소 질량).
   바깥 지름 약 0.8m, 내부 개구 폭은 다각형 근사로 약 0.478m입니다. 실측 제품 사양은 아닙니다.
@@ -309,11 +309,13 @@ small은 ANSUR II 여성 하위 5%(152.5cm·51.3kg), large는 남성 상위 5%(1
 - 검증은 초기 미연결 native 스프링·감쇠 힘 0, 연결/해제의 실제 가속도, 위치·속도·기준 길이 보존,
   재연결의 비중복, 모델 리셋 복원, 오래된 도착 플래그만으로 연결하지 않는 조건 검사,
   두 견인 방향의 연속 접근·연결·견인·완료 후 정지 유지와 형상 간격을 포함합니다.
-- 실제 접촉·후크와 로프 끊김·추론 응답 지연 감시는 후속 작업입니다. 전복·수치 오류·시뮬레이션 시간 감시는 아래 Watchdog에서 처리합니다.
+- 실제 접촉·후크와 로프 끊김은 후속 작업입니다. 전복·수치 오류·시뮬레이션 시간 감시는 아래 Watchdog에서,
+  추론 응답의 실제 시간 지연은 InferenceWatchdog에서 처리합니다.
 
 ## 실패 감지와 중단 (2026-11-13)
 
 - `MissionWatchdog`는 전체 RescueMission에 기본 적용하며 추론 응답의 wall-clock 지연은 감시하지 않습니다.
+  그 지연은 별도 `InferenceWatchdog`가 감시합니다.
   WatchdogSettings의 시험 기본값은 접근 150초·연결 5초·견인 100초·전체 240초, roll/pitch 60도입니다.
   시간은 `data.time` 기준입니다. 완료 후에는 전체 제한을 적용하지 않지만 수치·경고·전복 검사는 계속합니다.
   공유 미확정 Capsize 계약값은 변경하지 않습니다.
@@ -331,8 +333,16 @@ small은 ANSUR II 여성 하위 5%(152.5cm·51.3kg), large는 남성 상위 5%(1
 - FAILED는 mj_resetData만으로 해제되지 않습니다. mj_resetData 후 mission.reset을 명시적으로 호출해야 합니다.
   이때 실패·단계 시계·경로·tendon 초기 연결 상태를 함께 복원합니다.
 - headless는 실패 코드·단계·시각·메시지를 출력하고 종료 코드 1을 반환합니다.
-  --failure-demo timeout/capsize/nonfinite/warning은 명시적 오류 주입 시험입니다.
+  --failure-demo timeout/capsize/nonfinite/warning/inference는 명시적 오류 주입 시험입니다.
   --approach-only 독립 시험에는 이 Watchdog를 적용하지 않습니다.
+- `InferenceWatchdog`는 추론 요청 시각과 응답 시각의 실제 시간 차이를 봅니다. 기본 제한은 0.5초인 시연값이며
+  미확정 Capsize 계약값을 바꾸지 않습니다. 대기 중인 요청이 없으면 시계를 읽지 않습니다.
+  제한 시간에 도달하거나 응답이 더 늦으면 `INFERENCE_TIMEOUT`으로 고정하고 추진 명령을 (0, 0)으로 둡니다.
+  이미 기다리는 요청이 있으면 재요청은 최초 시각을 유지합니다. 요청 없는 응답은 오류입니다.
+  RescueMission.step은 물리 진행 전에 이를 검사하고, 실패 시 기존 중단과 같이 외력을 0으로 만든 뒤
+  물리를 더 진행하지 않습니다. 로프를 끊거나 다른 복구 동작을 하지 않습니다.
+  실패 시각의 임무 기록은 data.time이고, 감시 객체 자신의 기록은 실제 시각입니다.
+  reset은 추론 대기와 안전 모드를 함께 해제합니다.
 - 검증: 단계·전체 제한 시계, 순수 roll/pitch와 역전 자세, 정상 yaw의 비전복,
   NaN/무한대·무효 quaternion, 전후 검사, MuJoCo 경고, 실패 후 시간·자세 동결과 외력/명령 0,
   유효한 실패 렌더 데이터, 명시적 재시작, CLI 비정상 종료, 정상 전체 구조 시나리오 회귀를 포함합니다.
@@ -405,7 +415,7 @@ small은 ANSUR II 여성 하위 5%(152.5cm·51.3kg), large는 남성 상위 5%(1
 
 ## 시연과 시험 장면의 분리
 
-- 잡기·착용의 조립/진행/초기화와 시험용 외력 장치는 `sim/scenarios.py`에 둡니다.
+- 잡기·착용의 조립/진행/초기화와 시험용 외력 장치는 `sim/world/scenarios.py`에 둡니다.
   `view_grasp.py`·`view_wear.py`는 CLI와 표시를 담당하고 테스트는 scenarios의 장면을 직접 사용합니다.
 - `world.advance_world(world)`는 forward → acc.reset → 각 part.add_forces → acc.apply → step → forward를 실행합니다.
   제어 갱신·반복 리셋은 호출 측의 책임입니다. 기존 PhaseManager/Watchdog의 단계별 검사 순서는 유지합니다.

@@ -7,10 +7,11 @@ import importlib
 
 import pytest
 
-MODULES = ["config", "forces", "frames", "water", "robot", "human", "tether", "world", "phase_manager", "watchdog"]
+MODULES = ["config", "forces", "frames", "water.water", "water.buoyancy", "robot.robot", "robot.phase_manager",
+           "robot.rescue_approach", "world.world", "world.human", "world.tether", "world.watchdog"]
 
 # 05 문서 2장: 물·로봇·사람·줄 공통 모양
-PARTS = [("water", "Water"), ("robot", "Robot"), ("human", "Human"), ("tether", "Tether")]
+PARTS = [("water.water", "Water"), ("robot.robot", "Robot"), ("world.human", "Human"), ("world.tether", "Tether")]
 
 
 @pytest.mark.parametrize("name", MODULES)

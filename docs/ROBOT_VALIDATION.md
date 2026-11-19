@@ -6,7 +6,7 @@
 ## 환경과 범위
 
 - Conda `tether_rescue`, Python 3.12.14, MuJoCo 3.17.0, NumPy 1.26.4.
-- `python -m pytest tests/test_robot.py -v`: **27 passed in 0.71 s**(사용자 제공 출력).
+- `python -m pytest tests/robot/test_robot.py -v`: **27 passed in 0.71 s**(사용자 제공 출력).
 - 전체 파일의 통과와 사용자가 각 변수를 직접 확인한 항목을 구분한다. 센서 시험도 자동 실행에는 포함되지만 전 항목을 디버거로 관측한 것은 아니다.
 - 디버거의 실행 시간에는 입력 대기 시간이 포함되므로 성능 측정에 사용하지 않는다.
 

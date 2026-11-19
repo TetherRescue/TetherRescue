@@ -16,8 +16,8 @@ import mujoco
 import numpy as np
 
 from sim import config
-from sim.view_towing import build_surface_towing_world
-from sim.world import advance_world
+from sim.world.view_towing import build_surface_towing_world
+from sim.world.world import advance_world
 
 
 def main():

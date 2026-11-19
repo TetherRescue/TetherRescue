@@ -7,12 +7,12 @@ import pytest
 
 mujoco = pytest.importorskip('mujoco')
 
-from sim.view_towing import advance, build_towing_world
+from sim.world.view_towing import advance, build_towing_world
 from sim.frames import body_velocity_w
 
 
 def test_default_assembly_runs_thousand_steps_without_warning():
-    from sim.world import advance_world, build_world
+    from sim.world.world import advance_world, build_world
 
     world = build_world()
     for _ in range(1000):
@@ -62,10 +62,10 @@ def test_rope_reaction_preserves_total_linear_momentum_without_thrust():
 
 
 def test_without_rope_thrust_does_not_move_human():
-    from sim.human import Human
-    from sim.lifebuoy import Lifebuoy
-    from sim.robot import Robot
-    from sim.world import build_world
+    from sim.world.human import Human
+    from sim.world.lifebuoy import Lifebuoy
+    from sim.robot.robot import Robot
+    from sim.world.world import build_world
 
     robot, human = Robot(), Human()
     world = build_world(parts=[robot, human, Lifebuoy()], gravity=0)
