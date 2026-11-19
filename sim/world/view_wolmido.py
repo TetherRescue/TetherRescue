@@ -1,8 +1,8 @@
-"""월미도 해안 구조 시나리오: python -m sim.world.view_wolmido [--env calm|waves|low_tide] [--headless].
+"""월미도 해안 구조 시나리오: python -m sim.world.view_wolmido [--env calm|waves|low_tide] [--speed 2] [--headless].
 
-사람은 바다 한가운데에 구명환 없이 떠 있다. 구조 로봇은 구명환을 배 뒤 짧은 줄(1m)에 달고 해변 물가에서 출발해
-사람 둘레를 돌아 선미를 사람 손 쪽으로 대고, 윈치로 줄을 3m까지 풀어 구명환을 건넨다. 사람이 손을 뻗어 잡으면
-해변 쪽으로 최대 8m 끌고 와 멈춘다 (이후 사람 구조대 인계 가정). 구명환을 던지는 장치는 아직 없다(동경 담당 예정).
+사람은 바다 한가운데에 구명환 없이 떠 있다. 구조 로봇(동경 A형 선체)은 구명환을 발사대에 싣고 해변 물가에서 출발해
+사람 둘레를 돌아 선미를 사람 쪽으로 두고 멈춘 뒤 구명환을 쏜다(동경 Launcher·LaunchMission). 사람이 잡으면
+해변 쪽으로 끌고 와 물가 10m 앞에서 멈춘다. 화면은 기본 2배속으로 보여 준다 (--speed).
 환경 3개는 같은 맵에서 조건만 다르다 (config.Wolmido.ENVIRONMENTS):
   calm      만조·잔잔한 물
   waves     만조·파도(물 담당 기본 파도)
@@ -32,62 +32,41 @@ def beach_start(world_map, victim):
     return start, yaw, yaw + math.pi, min(distance - cfg.BEACH_TOW_STOP, cfg.BEACH_TOW_MAX)
 
 
-def flat_ring_quat(yaw):
-    """물에 눕힌 구명환 자세: 구멍 축이 위(z), 로컬 +y(로프 연결점 쪽)가 수평 yaw 방향."""
-    lie = np.array([math.cos(-math.pi / 4), 0., math.sin(-math.pi / 4), 0.])   # y축 −90°: 구멍 축 x → z
-    turn = np.array([math.cos((yaw - math.pi / 2) / 2), 0., 0., math.sin((yaw - math.pi / 2) / 2)])
-    quat = np.empty(4)
-    mujoco.mju_mulQuat(quat, turn, lie)
-    return quat
+def build_wolmido(env='calm', *, launch=None, watchdog_settings=None):
+    """월미도 맵·환경에 동경 구명환 발사 시나리오(LaunchMission)를 조립한다. (LaunchMission, WolmidoMap)을 돌려준다.
 
-
-def build_wolmido(env='calm', *, settings=None):
-    """구명환을 배 뒤 짧은 줄에 달고 해변 물가에서 출발하는 구조 시나리오(WolmidoDelivery)와 맵.
-
-    사람은 바다 한가운데(config.Wolmido.ENVIRONMENTS의 victim)에 구명환 없이 떠 있고, 왼손이 해변 쪽을 본다.
+    배는 해변 물가에서 사람 쪽을 보고 출발하고, 구명환은 배 발사대에 실려 있다. 사람은 바다 한가운데에 구명환 없이 떠 있다.
+    조립 순서·부품은 동경 build_launch_mission과 같고, 맵(WolmidoMap)과 환경의 파도만 더한다 (그 파일은 바꾸지 않음).
     """
+    from sim.robot.launcher import Launcher
     from sim.robot.robot import Robot
     from sim.water.water import Water
-    from sim.world.grasp import HumanGrasp
+    from sim.world.grasp import GraspSettings, HumanGrasp
     from sim.world.human import Human
+    from sim.world.launch_mission import LaunchMission, LaunchSettings
     from sim.world.lifebuoy import Lifebuoy
+    from sim.world.rescue_mission import RescueMissionSettings
     from sim.world.tether import Tether
-    from sim.world.wolmido_mission import DeliverySettings, ReachAssist, WolmidoDelivery
     from sim.world.world import build_world
 
     setting = WolmidoMap.environment(env)
-    settings = DeliverySettings() if settings is None else settings
+    launch = LaunchSettings() if launch is None else launch
     world_map = WolmidoMap(tide_drop=setting['tide_drop'])
     start, yaw, tow_heading, tow_distance = beach_start(world_map, setting['victim'])
     surface = config.WaterParams.SURFACE_Z
-    draft = config.Hull.MASS / (config.Physics.RHO_WATER * config.Hull.LENGTH * config.Hull.BEAM)
-    forward = np.array([math.cos(yaw), math.sin(yaw)])
-    left = np.array([-forward[1], forward[0]])
-    robot = Robot(position=(*start, surface + config.Hull.HEIGHT / 2 - draft), tow_point_b=config.Hull.TOW_POINT_B,
-                  winch=True)
-    # 구명환: 선미 줄 묶는 점 뒤로 0.9m(감은 줄 1m보다 짧아 처음엔 느슨함)에 로프 연결점이 오게 물에 눕힌다.
-    stern_b = np.asarray(config.Hull.TOW_POINT_B, dtype=float)
-    stern = start + forward * stern_b[0] + left * stern_b[1]
-    site = stern - forward * .9
-    ring_quat = flat_ring_quat(yaw)
-    offset = np.empty(3)
-    mujoco.mju_rotVecQuat(offset, np.asarray(config.Lifebuoy.TOW_POINT_B, dtype=float), ring_quat)
-    ring = Lifebuoy(position=(site[0] - offset[0], site[1] - offset[1], surface), quat=ring_quat, grip_sites=True)
-    # 사람: 왼손이 견인 방향(해변 쪽)을 보도록 돌린다.
-    human = Human(position=(*setting['victim'], surface - .03), grip_sites=True, yaw=tow_heading - math.pi / 2)
-    rope = Tether(enabled=True, attached=True)
-    grasp = HumanGrasp()
-    reach = ReachAssist(settings)
+    robot = Robot(position=(*start, surface + config.Hull.HEIGHT / 2 - config.Expect.DRAFT), yaw=yaw, winch=True)
+    human = Human(position=(*setting['victim'], surface - .03), grip_sites=True)
     water = Water(waves=getattr(config.WaterParams, setting['waves']),
                   floating_bodies=[config.Names.HUMAN_BODY, config.Names.LIFEBUOY_BODY], surface_visual=True)
-    world = build_world(parts=[water, robot, human, ring, rope, grasp, reach, world_map])
-    address = world.model.jnt_qposadr[robot.joint_id]
-    quaternion = [math.cos(yaw / 2), 0, 0, math.sin(yaw / 2)]
-    world.model.qpos0[address + 3:address + 7] = quaternion
-    world.data.qpos[address + 3:address + 7] = quaternion
+    ring = Lifebuoy(grip_sites=True)
+    rope = Tether(enabled=True, attached=True)
+    grasp = HumanGrasp(settings=GraspSettings(max_distance=launch.reach, max_relative_speed=launch.grab_relative_speed))
+    launcher = Launcher(ring_site=grasp.ring_name)
+    world = build_world(parts=[water, robot, human, ring, rope, grasp, launcher, world_map])
     mujoco.mj_forward(world.model, world.data)
-    mission = WolmidoDelivery(world, robot, rope, grasp, reach, tow_heading=tow_heading, tow_distance=tow_distance,
-                              settings=settings)
+    mission = LaunchMission(world, robot, launcher, grasp, rope, tow_heading=tow_heading,
+                            settings=RescueMissionSettings(tow_distance=tow_distance, tow_speed=.7),
+                            launch=launch, watchdog_settings=watchdog_settings)
     return mission, world_map
 
 
@@ -102,58 +81,63 @@ def boat_terrain_clearance(manager, world_map):
 
 
 def run_headless(mission, timeout):
-    while mission.world.data.time < timeout and mission.stage != 'COMPLETE':
+    data = mission.world.data
+    while data.time < timeout and not mission.arrived:
         if mission.step() is False:
-            raise RuntimeError(f'STOPPED [{mission.stage}] {mission.failure}')
-    if mission.stage != 'COMPLETE':
-        raise RuntimeError(f'{timeout:g}초 안에 구조를 끝내지 못했습니다 (단계 {mission.stage}).')
+            failure = mission.failure
+            raise RuntimeError(f'STOPPED: {failure.code.value} at {failure.time:.1f}s [{failure.stage}] - {failure.message}')
+    if not mission.arrived:
+        raise RuntimeError(f'{timeout:g}초 안에 구조를 끝내지 못했습니다 ({mission.readings()["phase"]}).')
     state = mission.readings()
-    return (f"구조 완료 {state['time']:.1f}초: 잡은 시각 {mission.grab_time:.1f}초, 사람 진행 {state['tow_progress']:.2f}m, "
-            f"장력 {state['tension']:.1f}N")
+    shot, landing = state['shot'], state['landing']
+    return (f"발사 {shot['time']:.1f}초 (거리 {shot['distance']:.2f} m) → 착수 잡는 점-손 {landing['grip_to_hand']:.2f} m → "
+            f"잡음 {mission.grab_time:.1f}초 → 견인 완료 {data.time:.1f}초, 사람 진행 {state['tow_progress']:.2f} m")
 
 
-def run_viewer(mission, title):
+def run_viewer(mission, title, speed=1.):
     import time
     import mujoco.viewer
     from sim.world.rope_visual import draw_rope
 
     world = mission.world
-    display = mujoco.MjData(world.model)
-    mujoco.mj_copyData(display, world.model, world.data)
-    with mujoco.viewer.launch_passive(world.model, display) as viewer:
+    with mujoco.viewer.launch_passive(world.model, world.data) as viewer:
         viewer.opt.geomgroup[config.Groups.PHYSICS] = 1
-        viewer.cam.distance, viewer.cam.azimuth, viewer.cam.elevation = 22., 150., -32.
-        budget = 0.
+        viewer.cam.distance, viewer.cam.azimuth, viewer.cam.elevation = 16., 150., -32.
+        frame, budget = 1 / 60, 0.
         while viewer.is_running():
             started = time.monotonic()
             with viewer.lock():
-                while budget < 1 / 60 and mission.stage != 'COMPLETE' and not mission.failed:
-                    mission.step()
-                    budget += world.model.opt.timestep
-                budget = max(0., budget - 1 / 60)
-                mujoco.mj_copyData(display, world.model, mission.display_data)
-                viewer.user_scn.ngeom = 0
-                draw_rope(viewer.user_scn, world.model, display, mission.rope)
-                boat, person = display.xpos[mission.robot.body_id], display.xpos[mission.human_body]
-                viewer.cam.lookat[:] = (boat + person) / 2
+                if not mission.failed and not mission.arrived:
+                    # 계산이 배속을 못 따라가면 밀린 시간은 버린다 (동경 view_launch와 같은 방식)
+                    budget = min(budget + frame * speed, 2 * frame * speed)
+                    while budget >= world.model.opt.timestep:
+                        if mission.step() is False:
+                            break
+                        budget -= world.model.opt.timestep
+                draw_rope(viewer.user_scn, world.model, world.data, mission.rope)
+                viewer.cam.lookat[:] = (world.data.xpos[mission.robot.body_id] + world.data.xpos[mission.human_body]) / 2
             state = mission.readings()
-            labels = 'Stage\nTime\nWinch\nRope length\nHand-ring gap\nHolding ring\nTension\nPerson towed'
-            values = (f"\n{state['stage']}\n{state['time']:.1f} s\n{state['delivery']}\n{state['rope_length']:.2f} m\n"
-                      f"{state['hand_ring_gap']:.2f} m\n{state['held']}\n{state['tension']:.1f} N\n{state['tow_progress']:.2f} m")
-            if mission.failed:
-                labels, values = labels + '\nStop reason', values + f"\n{mission.failure}"
+            landing = state['landing']
+            status = (mission.failure.code.value if mission.failed else 'COMPLETE' if mission.arrived else state['phase'])
             viewer.set_texts([(mujoco.mjtFontScale.mjFONTSCALE_150, mujoco.mjtGridPos.mjGRID_TOPLEFT,
-                               title + '\n' + labels, values)])
+                               f'{title} (x{speed:g})\nPhase\nTime\nLauncher\nGrip-hand gap\nLanding miss\nHeld\n'
+                               'Tension\nPerson towed',
+                               f"\n{status}\n{world.data.time:.1f} s\n{state['launcher']}\n{state['hand_gap']:.2f} m\n"
+                               + (f"{landing['grip_to_hand']:.2f} m" if landing else '-')
+                               + f"\n{state['held']}\n{state['tension']:.1f} N\n{state['tow_progress']:.2f} m")])
             viewer.sync()
-            time.sleep(max(0., 1 / 60 - (time.monotonic() - started)))
+            time.sleep(max(0., frame - (time.monotonic() - started)))
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--env', choices=tuple(config.Wolmido.ENVIRONMENTS), default='calm')
+    parser.add_argument('--speed', type=float, default=2., help='화면 재생 배속 (기본 2배, headless 에는 영향 없음)')
     parser.add_argument('--headless', action='store_true')
-    parser.add_argument('--timeout', type=float, default=300, help='headless 제한 시뮬레이션 시간 [초]')
+    parser.add_argument('--timeout', type=float, default=240, help='headless 제한 시뮬레이션 시간 [초]')
     args = parser.parse_args()
+    if not math.isfinite(args.speed) or args.speed <= 0:
+        parser.error('--speed 는 양수여야 합니다.')
     mission, world_map = build_wolmido(args.env)
     if args.headless:
         try:
@@ -161,7 +145,7 @@ def main():
         except RuntimeError as error:
             parser.exit(1, f'[{args.env}] {error}\n')
         return
-    run_viewer(mission, f'WOLMIDO / {args.env}')
+    run_viewer(mission, f'WOLMIDO / {args.env}', args.speed)
 
 
 if __name__ == '__main__':

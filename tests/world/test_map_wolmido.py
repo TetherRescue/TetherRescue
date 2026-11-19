@@ -110,50 +110,50 @@ def test_environments_are_named_and_unknown_is_rejected():
         WolmidoMap(tide_drop=-1)
 
 
-def test_lifebuoy_starts_on_the_robot_not_with_the_person():
+def test_lifebuoy_starts_on_the_robot_launcher_not_with_the_person():
+    from sim.robot.launcher import LOADED
     from sim.world.view_wolmido import build_wolmido
 
     mission, _ = build_wolmido("calm")
-    data = mission.world.data
-    stern = data.site_xpos[mission.stern_site]
-    ring = data.xpos[mission.ring_body]
-    assert np.linalg.norm(ring[:2] - stern[:2]) < 1.5          # 배 뒤 짧은 줄 끝
-    assert mission.reach.gap(data) > 20                          # 사람 손과는 멀리
+    model, data = mission.world.model, mission.world.data
+    ring = model.body(config.Names.LIFEBUOY_BODY).id
+    boat = mission.robot.body_id
+    assert mission.launcher.state == LOADED
+    assert data.eq_active[model.equality(config.Names.LAUNCHER_MOUNT_EQ).id]   # 발사대에 고정
+    assert np.linalg.norm(data.xpos[ring] - data.xpos[boat]) < 1.0              # 배 위
+    assert np.linalg.norm(data.xpos[ring, :2] - data.xpos[mission.human_body, :2]) > 20   # 사람과는 멀리
     assert not mission.grasp.is_held(data)
-    assert mission.robot.delivery_state == "STOWED"
-    assert mission.robot.rope_length(mission.world.model) == pytest.approx(config.Winch.STOW_LENGTH)
-    # 물에 눕힌 자세: 구멍 축(로컬 x)이 위를 본다.
-    axis = data.xmat[mission.ring_body].reshape(3, 3)[:, 0]
-    assert axis[2] == pytest.approx(1.0, abs=1e-6)
 
 
-@pytest.mark.parametrize("env", ["calm", "low_tide"])
-def test_robot_delivers_lifebuoy_then_tows_without_touching_terrain(env):
+@pytest.mark.parametrize("env", ["calm", "waves", "low_tide"])
+def test_robot_launches_lifebuoy_then_tows_without_touching_terrain(env):
     from sim.world.view_wolmido import boat_terrain_clearance, build_wolmido
 
     mission, world_map = build_wolmido(env)
     model = mission.world.model
+    ring_body = model.body(config.Names.LIFEBUOY_BODY).id
+
     def geoms(body):
         return [g for g in range(model.ngeom) if model.geom_bodyid[g] == body and model.geom_contype[g]]
 
-    human_geoms, ring_geoms = geoms(mission.human_body), geoms(mission.ring_body)
-    terrain = list(world_map.geom_ids.values())
-    boat_min = human_min = ring_min = math.inf
+    human_geoms, terrain = geoms(mission.human_body), list(world_map.geom_ids.values())
+    boat_min = human_min = math.inf
     seen, steps = [], 0
-    while mission.world.data.time < 300 and mission.stage != "COMPLETE":
-        assert mission.step(), mission.failure
+    while mission.world.data.time < 240 and not mission.arrived:
+        assert mission.step() is not False, mission.failure
         steps += 1
-        if not seen or seen[-1] != mission.stage:
-            seen.append(mission.stage)
+        stage = getattr(mission.stage, "value", mission.stage)
+        if not seen or seen[-1] != stage:
+            seen.append(stage)
         if steps % 50 == 0:
             data = mission.world.data
             boat_min = min(boat_min, boat_terrain_clearance(mission, world_map))
             human_min = min(human_min, min(mujoco.mj_geomDistance(model, data, a, b, 10., None)
                                            for a in human_geoms for b in terrain))
-            ring_min = min(ring_min, min(mujoco.mj_geomDistance(model, data, a, b, 10., None)
-                                         for a in ring_geoms for b in terrain))
-    assert seen == ["APPROACH", "DELIVER", "GRAB", "TOW", "COMPLETE"]
+    assert mission.arrived
+    assert seen == ["APPROACH", "LAUNCH", "GRAB", "TOW", "COMPLETE"]
     assert mission.grasp.is_held(mission.world.data)
     assert mission.readings()["tow_progress"] > 2
-    # 배·구명환은 해변 물가(물 깊이 0.6m)에서 출발하므로 바닥과 가깝다. 닿지만 않으면 된다. 사람은 지형에서 멀다.
-    assert boat_min > .2 and ring_min > 0 and human_min > 1.0
+    # 배는 해변 물가(물 깊이 0.6m)에서 출발하므로 바닥과 가깝다. 닿지만 않으면 된다. 사람은 지형에서 멀다.
+    assert boat_min > .2 and human_min > 1.0
+    assert ring_body != mission.human_body
