@@ -6,6 +6,9 @@ from sim import config, frames
 from sim.config import Hull, Names, Sensors, Thruster, Winch
 
 SITE_SIZE = (0.03,)   # 점(site) 표시 크기 [m]. 그림용이라 물리에 영향 없음
+HULL_RGBA = (0.9, 0.4, 0.1, 1.0)
+# A형 선체 충돌 형상 이름 (왼쪽 다리, 오른쪽 다리, 연결부, 뱃머리). config.Hull.SHAPE == "a_frame" 일 때 생김
+A_FRAME_GEOMS = ("hull_leg_l", "hull_leg_r", "hull_bridge", "hull_bow")
 
 # 윈치 상태: 감음(짧게 끌고 감) → 푸는 중 → 다 풀림(= 건네줌). delivery_ready 는 PAID_OUT 일 때만 True
 STOWED, PAYING_OUT, PAID_OUT = 'STOWED', 'PAYING_OUT', 'PAID_OUT'
@@ -73,7 +76,8 @@ class Robot:
         만드는 것 (이름은 전부 config.Names):
           boat      배 몸체. 원점 = 선체 상자 중심 (Frames.BODY_ORIGIN)
           boat_free 자유 관절 (이동 3 + 회전 3)
-          hull      선체 상자. 물이 이 크기를 읽어 부력을 계산
+          hull      선체를 감싸는 상자. 물이 이 크기를 읽어 부력 복셀을 만듦.
+                    A형(Hull.SHAPE)이면 투명·충돌 없음이고 실제 형상은 A_FRAME_GEOMS (다리·연결부·뱃머리)
           thr_l/r   추진기 점 (Thruster.POS_L_B/R_B)
           tow_point 줄 묶는 점 (Hull.TOW_POINT_B)
           cam_bow   앞을 보는 카메라 (Sensors.CAMERA_POS_B). 일반 영상만, 열화상은 THERMAL_ENABLED 때
@@ -96,14 +100,19 @@ class Robot:
         body.ipos = Hull.COM
         body.inertia = Hull.INERTIA
 
-        hull = body.add_geom(
+        # 감싸는 상자: 물이 이 크기로 복셀을 만든 뒤 모양(hull_contains) 밖을 버린다. 직육면체일 때만 이 상자가 곧 선체
+        box = Hull.SHAPE == "box"
+        body.add_geom(
             name=Names.HULL_GEOM,
             type=mujoco.mjtGeom.mjGEOM_BOX,
             size=(Hull.LENGTH / 2, Hull.BEAM / 2, Hull.HEIGHT / 2),   # MuJoCo box 는 반 길이
-            rgba=(0.9, 0.4, 0.1, 1.0),
-            group=config.Groups.PHYSICS,
-            contype=config.Contacts.BOAT, conaffinity=config.Contacts.BOAT_AFFINITY,
+            rgba=HULL_RGBA if box else (0, 0, 0, 0),
+            group=config.Groups.PHYSICS if box else config.Groups.VISUAL,
+            contype=config.Contacts.BOAT if box else 0,
+            conaffinity=config.Contacts.BOAT_AFFINITY if box else 0,
         )
+        if not box:
+            self._add_a_frame(spec, body)
 
         body.add_site(name=Names.THRUSTER_L_SITE, pos=Thruster.POS_L_B, size=SITE_SIZE)
         body.add_site(name=Names.THRUSTER_R_SITE, pos=Thruster.POS_R_B, size=SITE_SIZE)
@@ -119,6 +128,33 @@ class Robot:
         if Sensors.CAMERA_FOVY is not None:   # 합의 전엔 MuJoCo 기본 45°
             cam.fovy = Sensors.CAMERA_FOVY
         return body
+
+    @staticmethod
+    def _add_a_frame(spec, body):
+        """A형 선체의 실제 충돌·표시 형상: 다리 2개 + 연결부 + 뱃머리(사다리꼴 기둥 메시). 모양은 config.Hull."""
+        L, B, H = Hull.LENGTH, Hull.BEAM, Hull.HEIGHT
+        stern, slot_end = -L / 2, -L / 2 + Hull.SLOT_DEPTH
+        leg_w = (B - Hull.SLOT_WIDTH) / 2
+        leg_y = B / 2 - leg_w / 2
+        if Hull.MOON_POOL is not None:
+            raise NotImplementedError("Hull.MOON_POOL 충돌 형상은 아직 없음 (물 복셀만 지원)")
+        boxes = {
+            # 다리: 선미 ~ 뱃머리 시작. 연결부: 홈 앞끝 ~ 뱃머리 시작, 다리 사이
+            A_FRAME_GEOMS[0]: ((stern + Hull.BOW_START_X) / 2, leg_y, (Hull.BOW_START_X - stern) / 2, leg_w / 2),
+            A_FRAME_GEOMS[1]: ((stern + Hull.BOW_START_X) / 2, -leg_y, (Hull.BOW_START_X - stern) / 2, leg_w / 2),
+            A_FRAME_GEOMS[2]: ((slot_end + Hull.BOW_START_X) / 2, 0.0, (Hull.BOW_START_X - slot_end) / 2, Hull.SLOT_WIDTH / 2),
+        }
+        common = dict(rgba=HULL_RGBA, group=config.Groups.PHYSICS,
+                      contype=config.Contacts.BOAT, conaffinity=config.Contacts.BOAT_AFFINITY)
+        for name, (x, y, hx, hy) in boxes.items():
+            body.add_geom(name=name, type=mujoco.mjtGeom.mjGEOM_BOX, pos=(x, y, 0.0), size=(hx, hy, H / 2), **common)
+        verts = []
+        for z in (-H / 2, H / 2):
+            verts += [Hull.BOW_START_X, B / 2, z, Hull.BOW_START_X, -B / 2, z,
+                      L / 2, -Hull.BOW_TIP_HALF_BEAM, z, L / 2, Hull.BOW_TIP_HALF_BEAM, z]
+        mesh = spec.add_mesh()
+        mesh.name, mesh.uservert = A_FRAME_GEOMS[3] + "_mesh", verts
+        body.add_geom(name=A_FRAME_GEOMS[3], type=mujoco.mjtGeom.mjGEOM_MESH, meshname=mesh.name, **common)
 
     def bind(self, model):
         """이름 → id 를 한 번만 찾아 캐시한다. 없으면 assert 로 멈춘다.
@@ -144,6 +180,10 @@ class Robot:
         self.camera_id = find(mujoco.mjtObj.mjOBJ_CAMERA, Names.CAMERA_BOW)
         self.joint_id = free_id
         self.geom_id = self.hull_geom_id
+        # 실제로 부딪히는 배 형상 (간격·관통 검사용). A형이면 다리·연결부·뱃머리, 직육면체면 hull 하나
+        self.collision_geom_ids = tuple(g for g in range(model.ngeom)
+                                        if model.geom_bodyid[g] == self.body_id and model.geom_contype[g])
+        assert self.collision_geom_ids, "배에 충돌 형상이 없음"
         self.site_ids = (self.thr_l_site_id, self.thr_r_site_id)
 
         if self.winch:

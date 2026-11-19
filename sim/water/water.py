@@ -47,10 +47,11 @@ def wave_height(x, y, t, waves=config.WaterParams.WAVES_DEFAULT):
 def restoring_stiffness(mass):
     """배를 살짝 기울였을 때 되돌아오려는 힘의 세기 k [N·m/rad] = (roll, pitch).
 
-    직육면체 선체(config.Hull) 공식:
-      흘수 T = m / (rho · L · B)            # 물에 잠기는 깊이
+    벽이 곧은 선체(config.Hull, 위에서 본 모양 hull_contains) 공식:
+      흘수 T = m / (rho · A)                # 물에 잠기는 깊이. A = Hull.WATERPLANE_AREA
       KB = T / 2                            # 바닥 → 부력 중심 (잠긴 부분의 가운데)
-      BM = 폭² / (12 · T)                   # 부력 중심 → 메타센터 (roll 은 폭 B, pitch 는 길이 L)
+      BM = I / V                            # 부력 중심 → 메타센터. I = Hull.WATERPLANE_INERTIA (roll, pitch),
+                                            #   V = m / rho. 상자면 I = L·B³/12 → BM = B² / (12 · T)
       KG = HEIGHT / 2 + COM_z               # 바닥 → 무게중심 (원점이 상자 중심, COM_z 는 원점 기준)
       GM = KB + BM − KG                     # 메타센터 높이: 클수록 오뚝이처럼 잘 일어남
       k  = m · g · GM
@@ -60,15 +61,16 @@ def restoring_stiffness(mass):
     """
     rho = config.Physics.RHO_WATER
     g = config.Physics.GRAVITY
-    L, B, H = config.Hull.LENGTH, config.Hull.BEAM, config.Hull.HEIGHT
+    H = config.Hull.HEIGHT
+    volume = mass / rho
 
-    draft = mass / (rho * L * B)
+    draft = volume / config.Hull.WATERPLANE_AREA
     kb = draft / 2.0
     kg = H / 2.0 + config.Hull.COM[2]
 
     stiffness = []
-    for name, width in (("roll", B), ("pitch", L)):
-        gm = kb + width ** 2 / (12.0 * draft) - kg
+    for name, inertia in zip(("roll", "pitch"), config.Hull.WATERPLANE_INERTIA):
+        gm = kb + inertia / volume - kg
         if gm <= 0:
             raise ValueError(
                 f"{name} 메타센터 높이 GM = {gm:.3f} m ≤ 0 → 기울면 되돌아오지 못하고 뒤집힘. "
@@ -119,6 +121,15 @@ def make_voxels(size=None, res=None):
     return centers_b, cell_size, float(np.prod(cell_size))
 
 
+def make_hull_voxels(size=None, res=None):
+    """make_voxels 와 같지만 선체 모양(config.hull_contains) 밖의 칸을 뺀다. 칸 중심이 안이면 그 칸 전체를 씀.
+
+    VOXEL_RES 는 홈·다리 경계가 칸 경계와 맞게 골라 둠 → 상자 부분은 정확, 뱃머리 비스듬한 면만 계단 근사.
+    """
+    centers_b, cell_size, cell_volume = make_voxels(size=size, res=res)
+    return centers_b[config.hull_contains(centers_b)], cell_size, cell_volume
+
+
 def voxel_buoyancy(data, body_id, t=None, waves=config.WaterParams.WAVES_DEFAULT, voxels=None,
                    gravity=config.Physics.GRAVITY):
     """지금 MuJoCo 상태(data)에서 몸체의 칸마다 부력과 작용점 (월드 좌표).
@@ -126,7 +137,7 @@ def voxel_buoyancy(data, body_id, t=None, waves=config.WaterParams.WAVES_DEFAULT
     data    : MuJoCo MjData. 몸체의 현재 위치·기울기가 들어 있다
     body_id : body 번호. bind 때 한 번 찾아 둔 값
     t       : 시각 [s] (파도 계산용). 안 주면 data.time (시뮬레이션 현재 시각)
-    voxels  : (칸 중심(몸체 좌표), 칸 크기, 칸 부피). 안 주면 선체 make_voxels().
+    voxels  : (칸 중심(몸체 좌표), 칸 크기, 칸 부피). 안 주면 선체 make_hull_voxels().
               배 모양은 안 변하니 bind 때 한 번 만들어 넘기면 됨
     gravity : 중력 크기 [m/s²]. Water 는 MuJoCo model.opt.gravity 크기를 넘긴다
 
@@ -138,7 +149,7 @@ def voxel_buoyancy(data, body_id, t=None, waves=config.WaterParams.WAVES_DEFAULT
     좌표 변환은 직접 계산하지 않고 전부 sim/frames.py 함수로 한다 (노션 06 문제 2, 동경 요청).
       각자 회전행렬을 곱하면 축이 어긋나도 오류 없이 조용히 틀리기 때문.
     """
-    centers_b, cell_size, cell_volume = voxels if voxels is not None else make_voxels()
+    centers_b, cell_size, cell_volume = voxels if voxels is not None else make_hull_voxels()
     if t is None:
         t = data.time
 
@@ -191,17 +202,19 @@ def voxel_buoyancy(data, body_id, t=None, waves=config.WaterParams.WAVES_DEFAULT
 #   회전 축 순서: (roll 좌우 기울기, pitch 앞뒤 기울기, yaw 방향 돌기)
 
 
-def heave_damping(mass, length=config.Hull.LENGTH, beam=config.Hull.BEAM, gravity=config.Physics.GRAVITY):
+def heave_damping(mass, area=None, gravity=config.Physics.GRAVITY):
     """위아래 출렁임을 멈추게 하는 선형 계수 c [N·s/m] (감쇠비 HEAVE_DAMPING_RATIO 에서 계산).
 
     배를 살짝 눌렀다 놓으면 용수철처럼 위아래로 출렁인다.
-      용수철 세기 k = ρ · g · L · B   (1 m 더 잠기면 부력이 이만큼 늘어남 = 수면에 닿은 면적 × ρg)
+      용수철 세기 k = ρ · g · A   (1 m 더 잠기면 부력이 이만큼 늘어남 = 수면에 닿은 면적 A × ρg)
       무게       m = 배 무게
     감쇠비 ζ 로 "얼마나 빨리 멎을지"를 정하면 필요한 계수는 c = 2 · ζ · √(m · k).
     → 배 무게·크기가 바뀌어도 출렁임이 멎는 빠르기는 그대로 유지된다.
-    Water 는 MuJoCo 모델의 선체 크기·중력을 넘긴다.
+    area 를 안 주면 Hull.WATERPLANE_AREA. Water 는 MuJoCo 모델의 중력을 넘긴다.
     """
-    k = config.Physics.RHO_WATER * gravity * length * beam
+    if area is None:
+        area = config.Hull.WATERPLANE_AREA
+    k = config.Physics.RHO_WATER * gravity * area
     return 2.0 * config.WaterParams.HEAVE_DAMPING_RATIO * math.sqrt(mass * k)
 
 
@@ -245,7 +258,7 @@ def boat_drag_coefficients(mass, inertia, size=None, gravity=config.Physics.GRAV
     if size is None:
         size = (config.Hull.LENGTH, config.Hull.BEAM, config.Hull.HEIGHT)
     surge_lin, sway_lin, _ = config.WaterParams.DRAG_LINEAR
-    linear = (surge_lin, sway_lin, heave_damping(mass, size[0], size[1], gravity))
+    linear = (surge_lin, sway_lin, heave_damping(mass, gravity=gravity))
     return drag_coefficients(linear, rot_drag_linear(mass, inertia), config.WaterParams.DRAG_CD,
                              config.WaterParams.ROT_DRAG_QUAD, size)
 
@@ -422,9 +435,10 @@ class Water:
             if not np.allclose(rotation.reshape(3, 3), np.eye(3)):
                 raise ValueError("현재 선체 부력은 body 축과 정렬된 box hull만 지원합니다.")
             size = 2 * model.geom_size[geom_id]
-            # 선체 상자를 VOXEL_RES 칸으로 자른다 (make_voxels: 중심, 칸 크기, 칸 부피)
+            # 선체 상자를 VOXEL_RES 칸으로 자른 뒤 (make_voxels: 중심, 칸 크기, 칸 부피)
+            # 선체 모양(config.hull_contains: A형 홈·뱃머리 양옆) 밖의 칸을 버린다
             self.body_id = body_id
-            self.voxels = make_voxels(size=size)
+            self.voxels = make_hull_voxels(size=size)
             centers_b, cell_size, cell_volume = self.voxels
             voxels = (centers_b + model.geom_pos[geom_id], cell_size, cell_volume)
             mass = model.body_subtreemass[body_id]

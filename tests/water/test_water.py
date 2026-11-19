@@ -93,13 +93,44 @@ def _free_rock(stiffness, inertia, damping, tilt0=math.radians(15), seconds=3.0,
     return np.array(history)
 
 
+def test_waterplane_of_a_frame_by_hand():
+    # A형 (2026-11-19, 1.5 × 1.2 m, 홈 0.9 × 0.9, 다리 폭 0.15, 뱃머리 x 0.45~0.75 에서 반폭 0.6 → 0.2)
+    #   넓이 = 1.5·1.2 − 홈 0.9·0.9 − 뱃머리 양옆 삼각형 2·(0.3·0.4/2) = 1.8 − 0.81 − 0.12 = 0.87 m²
+    #   roll 2차 모멘트 ∫y² dA (x 축 둘레):
+    #     다리 2개  2 · 1.2 · (0.6³ − 0.45³)/3 = 0.09990
+    #     연결부    0.3 · 2 · 0.45³/3          = 0.01823
+    #     뱃머리    ∫ 2h³/3 dx, h: 0.6→0.2     = (2/3) · 0.3 · (0.6⁴ − 0.2⁴)/(4 · 0.4) = 0.01600
+    #     합 ≈ 0.1341 m⁴
+    if config.Hull.SHAPE != "a_frame":
+        pytest.skip("A형 선체 손 계산")
+    assert config.Hull.WATERPLANE_AREA == pytest.approx(0.87, rel=1e-3)
+    assert config.Hull.WATERPLANE_INERTIA[0] == pytest.approx(0.1341, rel=0.01)
+
+
+def test_box_waterplane_matches_box_formula(monkeypatch):
+    # 상자 모양이면 예전 직육면체 공식과 같아야 함: 넓이 L·B, roll L·B³/12, pitch B·L³/12
+    monkeypatch.setattr(config.Hull, "SHAPE", "box")
+    L, B = config.Hull.LENGTH, config.Hull.BEAM
+    area, center_x, (i_roll, i_pitch) = config._waterplane()
+    assert area == pytest.approx(L * B)
+    assert center_x == pytest.approx(0.0, abs=1e-12)
+    assert i_roll == pytest.approx(L * B ** 3 / 12, rel=1e-3)
+    assert i_pitch == pytest.approx(B * L ** 3 / 12, rel=1e-3)
+
+
 def test_restoring_stiffness_by_hand():
-    # 손 계산 값 (2026-11-13 선체 19.6 kg, 1.3 × 0.6 × 0.2 m): 흘수 0.0245 m, KG(바닥→무게중심) 0.0771 m
-    #   roll  GM = 0.01226 + 0.6²/(12·0.02452) − 0.0771 ≈ 1.159 m → k ≈ 222.8
-    #   pitch GM = 0.01226 + 1.3²/(12·0.02452) − 0.0771 ≈ 5.680 m → k ≈ 1092
-    k_roll, k_pitch = water.restoring_stiffness(MASS)
-    assert k_roll == pytest.approx(222.8, rel=0.01)
-    assert k_pitch == pytest.approx(1092, rel=0.01)
+    # 손 계산 (벽이 곧은 선체): 흘수 T = m/(ρA), KB = T/2, BM = I/V (V = m/ρ), KG = H/2 + COM_z
+    # A형 19.6 kg: T = 19.6/(1025·0.87) ≈ 0.02198 m, V ≈ 0.019122 m³, KG ≈ 0.0771 m
+    #   roll  GM = 0.01099 + 0.13412/0.019122 − 0.0771 ≈ 6.948 m → k = m·g·GM ≈ 1336
+    #   pitch GM = 0.01099 + 0.12733/0.019122 − 0.0771 ≈ 6.593 m → k ≈ 1268
+    rho, g = config.Physics.RHO_WATER, config.Physics.GRAVITY
+    volume = MASS / rho
+    draft = volume / config.Hull.WATERPLANE_AREA
+    kg = config.Hull.HEIGHT / 2 + config.Hull.COM[2]
+    expected = [MASS * g * (draft / 2 + i / volume - kg) for i in config.Hull.WATERPLANE_INERTIA]
+    np.testing.assert_allclose(water.restoring_stiffness(MASS), expected, rtol=1e-12)
+    if config.Hull.SHAPE == "a_frame":
+        assert water.restoring_stiffness(MASS) == pytest.approx((1336, 1268), rel=0.01)
 
 
 def test_rot_drag_gives_target_damping_ratio():
@@ -133,8 +164,8 @@ def test_old_small_coefficient_keeps_rocking(axis):
 
 
 def test_unstable_hull_raises(monkeypatch):
-    # 무게중심이 너무 높으면 (GM ≤ 0) 바로 에러. 1.0 m 위로는 이 선체 roll GM(BM ≈ 1.2 m)이 아직 양수라 2.0 m
-    monkeypatch.setattr(config.Hull, "COM", (0.0, 0.0, 2.0))
+    # 무게중심이 너무 높으면 (GM ≤ 0) 바로 에러. A형은 넓어서 BM 이 약 7 m 라 10 m 위로 올린다
+    monkeypatch.setattr(config.Hull, "COM", (0.0, 0.0, 10.0))
     with pytest.raises(ValueError, match="뒤집힘"):
         water.restoring_stiffness(MASS)
 
@@ -146,9 +177,9 @@ def test_unstable_hull_raises(monkeypatch):
 # world.py(가영) 없이도 되도록, 동경 님 tests/test_frames.py 처럼 상자 하나짜리 모델을 직접 만든다.
 CALM = WaterParams.WAVES_CALM
 RHO_G = config.Physics.RHO_WATER * config.Physics.GRAVITY
-HULL_VOLUME = config.Hull.LENGTH * config.Hull.BEAM * config.Hull.HEIGHT
+HULL_VOLUME = config.Hull.WATERPLANE_AREA * config.Hull.HEIGHT   # 벽이 곧은 선체: 위에서 본 넓이 × 높이
 # 흘수만큼 잠긴 위치: 원점(상자 중심)이 수면 위 (높이/2 − 흘수) 에 있어야 선체 바닥이 수면 아래 흘수 깊이에 온다
-#   0.2/2 − 0.0245 ≈ +0.0755 m   (Hull.HEIGHT 0.2 m, Expect.DRAFT ≈ 2.45 cm)
+#   0.2/2 − 0.022 ≈ +0.078 m   (Hull.HEIGHT 0.2 m, Expect.DRAFT ≈ 2.2 cm)
 FLOAT_Z = config.Hull.HEIGHT / 2 - config.Expect.DRAFT
 
 
@@ -187,9 +218,14 @@ def _boat(z=FLOAT_Z, roll_deg=0.0, pitch_deg=0.0):
 
 def test_voxels_fill_the_hull():
     centers_b, cell_size, cell_volume = water.make_voxels()
-    assert len(centers_b) == np.prod(WaterParams.VOXEL_RES)  # 8×4×4 = 128 칸
-    assert cell_volume * len(centers_b) == pytest.approx(HULL_VOLUME)  # 칸 부피 합 = 선체 부피
+    assert len(centers_b) == np.prod(WaterParams.VOXEL_RES)  # 감싸는 상자 전체 30×8×4 = 960 칸
     np.testing.assert_allclose(centers_b.mean(axis=0), 0.0, atol=1e-12)  # 칸들의 가운데 = 원점(상자 중심)
+    # 선체 모양 밖(홈·뱃머리 양옆)을 버린 칸: 부피 합 = 선체 부피, 가운데 x = 넓이 중심
+    hull_b, _, _ = water.make_hull_voxels()
+    assert cell_volume * len(hull_b) == pytest.approx(HULL_VOLUME)
+    # 뱃머리 비스듬한 면은 칸 계단 근사라 넓이 중심이 1 mm 안쪽으로 어긋날 수 있음
+    assert hull_b[:, 0].mean() == pytest.approx(config.Hull.WATERPLANE_CENTER_X, abs=1e-3)
+    assert config.hull_contains(hull_b).all()
 
 
 def test_out_of_water_no_buoyancy():
@@ -215,7 +251,7 @@ def test_buoyancy_points_up_only():
 
 
 def test_floats_at_hand_draft():
-    # 완료 기준 미리 확인: 흘수(Expect.DRAFT ≈ 0.0245 m) 위치에서 부력 합 = 배 무게
+    # 완료 기준 미리 확인: 흘수(Expect.DRAFT ≈ 0.022 m) 위치에서 부력 합 = 배 무게
     model, data, bid = _boat()
     forces, _, _ = water.voxel_buoyancy(data, bid, waves=CALM)
     weight = model.body_subtreemass[bid] * config.Physics.GRAVITY  # 배 무게도 MuJoCo 모델에서 읽음
@@ -239,7 +275,7 @@ def _tilt_torque(**tilt):
     return np.cross(points - data.xipos[bid], forces).sum(axis=0)
 
 
-# 바닥 모서리가 물 밖으로 나오는 각도 = atan(2·흘수 / 폭). 새 선체(흘수 2.45 cm, 폭 0.6 m)는 약 4.7°.
+# 바닥 모서리가 물 밖으로 나오는 각도 = atan(2·흘수 / 폭). A형(흘수 2.2 cm, 폭 1.2 m)은 약 2.1°.
 # 이 각도를 넘으면 복원 토크가 거의 늘지 않아서 작은 각도 공식 k·θ 가 맞지 않는다.
 EDGE_EMERGE_DEG = math.degrees(math.atan(2 * config.Expect.DRAFT / config.Hull.BEAM))
 
@@ -251,7 +287,7 @@ def test_roll_restores(deg):
     assert np.sign(torque[0]) == -np.sign(deg)
 
 
-@pytest.mark.parametrize("deg", [3, -3])
+@pytest.mark.parametrize("deg", [1.5, -1.5])
 def test_roll_small_angle_matches_hand(deg):
     # 크기는 모서리가 잠겨 있는 작은 각도에서만 직육면체 손 계산(k·θ)과 비교한다.
     # 30% 허용: 폭 방향 칸 수가 적어서 생기는 복셀 근사 오차
@@ -292,8 +328,8 @@ def _moving_boat(yaw_deg=0.0, vel_w=(0.0, 0.0, 0.0), omega_b=(0.0, 0.0, 0.0)):
 
 # ── 계수 ──
 def test_heave_damping_ratio():
-    # 계산한 위아래 계수를 거꾸로 감쇠비로 바꾸면 config 값(0.3)이 나와야 함
-    k = config.Physics.RHO_WATER * config.Physics.GRAVITY * config.Hull.LENGTH * config.Hull.BEAM
+    # 계산한 위아래 계수를 거꾸로 감쇠비로 바꾸면 config 값(0.3)이 나와야 함 (용수철 세기 = ρ·g·수면 넓이)
+    k = config.Physics.RHO_WATER * config.Physics.GRAVITY * config.Hull.WATERPLANE_AREA
     zeta = COEFFS["lin"][2] / (2 * math.sqrt(config.Hull.MASS * k))
     assert zeta == pytest.approx(WaterParams.HEAVE_DAMPING_RATIO)
 
@@ -311,9 +347,10 @@ def test_surge_drag_by_hand():
 
 def test_sideways_harder_than_forward():
     # 같은 속도라도 옆으로 미는 게 훨씬 힘들어야 함 (옆면이 앞면보다 넓고 Cd 도 큼)
+    # A형은 길이 1.5 · 폭 1.2 로 옆면/앞면 넓이 비가 1.25 라 직육면체(2.2)보다 차이가 작음 → 2배로 확인
     forward, _ = water.drag_b([1.0, 0, 0], [0, 0, 0], COEFFS)
     sideways, _ = water.drag_b([0, 1.0, 0], [0, 0, 0], COEFFS)
-    assert abs(sideways[1]) > 3 * abs(forward[0])
+    assert abs(sideways[1]) > 2 * abs(forward[0])
 
 
 def test_heave_quad_uses_full_bottom_area():
@@ -448,11 +485,11 @@ def test_bind_fails_loudly_without_boat():
 def test_bind_reads_model():
     world, water_part, _ = _sim_world()
     assert water_part.body_id == world.model.body(config.Names.BOAT_BODY).id
-    assert len(water_part.voxels[0]) == np.prod(WaterParams.VOXEL_RES)
+    assert len(water_part.voxels[0]) == len(water.make_hull_voxels()[0])   # 모양 밖 칸은 버림
 
 
 def test_drop_settles_at_hand_draft():
-    # ★ 1주차 완료 기준: 물 위 5 cm 에서 떨어뜨리면 출렁이다가 손 계산 흘수(Expect.DRAFT ≈ 0.0245 m)에 멈춘다
+    # ★ 1주차 완료 기준: 물 위 5 cm 에서 떨어뜨리면 출렁이다가 손 계산 흘수(Expect.DRAFT ≈ 0.022 m)에 멈춘다
     world, _, _ = _sim_world(lift=0.05)
     drafts = _run(world, seconds=5.0)
     assert np.all(np.isfinite(drafts)), "계산이 폭발함 (NaN)"
@@ -623,74 +660,21 @@ def test_calm_water_no_drift(added_mass_on):
 #   → 정답과 비교하는 테스트를 두어, 틀어지면 바로 실패하게 한다.
 #
 # "정답"은 어떻게 구하나
-#   선체는 상자라서, 기울인 단면(직사각형)을 수면 아래만 잘라 내면 잠긴 넓이·중심을 정확히 계산할 수 있다.
-#   roll 이면 폭×높이 단면, pitch 면 길이×높이 단면. 단면이 길이 방향으로 같으니 넓이 × 길이 = 잠긴 부피.
+#   상자였을 때는 기울인 단면(직사각형)을 수면 아래만 잘라 정확히 계산했다 (2026-11-16).
+#   A형(2026-11-19)은 길이 방향으로 단면이 달라(홈·뱃머리) 단면 하나로 못 구한다.
+#   → 같은 모양을 각 방향 2~4배 촘촘한 칸(REFERENCE_RES)으로 잘라 잰 값을 정답으로 쓴다.
+#     칸을 늘리면 값이 정답에 수렴한다는 건 상자 때 확인함 (16×8×8, 32×16×16).
 #
 # GZ (복원팔) 란
 #   배를 기울였을 때 부력 중심이 무게중심에서 옆으로 떨어진 거리 [m].
 #   양수 = 다시 일어섬, 음수 = 더 넘어감. GZ 가 0 이 되는 각도 = 복원력 소실각 (넘으면 못 돌아옴).
 #   두 방법 모두 "부력 = 배 무게" 가 되는 높이에 띄운 뒤 GZ 를 잰다.
 #
-# 2026-11-16 측정 (VOXEL_RES 8×4×4)
-#   roll : 10~80° 에서 복셀이 정답보다 5~10% 작음 (폭 방향 4칸이라 거칠어서). 소실각 정답 96.0° / 복셀 97.1°
-#   pitch: 오차 4% 이내. 소실각 정답·복셀 모두 92.3°
-#   칸을 늘리면(16×8×8, 32×16×16) 오차가 줄어 정답에 붙는다 → 오차 원인은 칸의 거칠기.
-LARGE_ANGLE_GZ_TOL = 0.15        # GZ 허용 오차 (측정 최대 약 10% + 여유)
-VANISHING_ANGLE_TOL_DEG = 2.0    # 소실각 허용 오차 [°] (측정 1.1° + 여유)
-
-
-def _clip_below_surface(poly):
-    """다각형 [(가로, 높이), ...] 에서 수면(높이 0) 아래 부분만 남긴다.
-    꼭짓점을 차례로 보며, 물속 점은 남기고 수면을 가로지르는 변은 수면과 만나는 점을 넣는다."""
-    out = []
-    for i, p in enumerate(poly):
-        q = poly[(i + 1) % len(poly)]
-        if p[1] <= 0:
-            out.append(p)
-        if (p[1] <= 0) != (q[1] <= 0):
-            t = p[1] / (p[1] - q[1])
-            out.append((p[0] + t * (q[0] - p[0]), 0.0))
-    return out
-
-
-def _area_and_center(poly):
-    """다각형 넓이와 중심의 가로 위치 (신발끈 공식)."""
-    area = center = 0.0
-    for i, p in enumerate(poly):
-        q = poly[(i + 1) % len(poly)]
-        cross = p[0] * q[1] - q[0] * p[1]
-        area += cross
-        center += (p[0] + q[0]) * cross
-    return abs(area) / 2, (center / (3 * area) if area else 0.0)
-
-
-def _exact_gz(deg, axis):
-    """상자 단면으로 계산한 정답 GZ [m]. axis 0 = roll, 1 = pitch.
-
-    단면 좌표 = (가로, 높이). roll 의 가로 = 몸체 y, pitch 의 가로 = 몸체 x.
-    pitch 는 +각도일 때 앞(+x)이 내려가므로, 같은 식을 쓰려고 단면을 반대로 돌린다.
-    """
-    width, length = (config.Hull.BEAM, config.Hull.LENGTH) if axis == 0 else (config.Hull.LENGTH, config.Hull.BEAM)
-    height = config.Hull.HEIGHT
-    com_side, com_up = config.Hull.COM[1 - axis], config.Hull.COM[2]   # roll → y, pitch → x
-    angle = math.radians(deg) * (1 if axis == 0 else -1)
-    c, s = math.cos(angle), math.sin(angle)
-
-    def turn(side, up):
-        return side * c - up * s, side * s + up * c
-
-    corners = [turn(w * width / 2, h * height / 2) for w, h in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
-    volume_needed = config.Hull.MASS / config.Physics.RHO_WATER   # 떠 있으려면 이만큼 잠겨야 함
-
-    lo, hi = -1.0, 1.0   # 상자 중심 높이 탐색 범위. 높을수록 덜 잠김
-    for _ in range(60):  # 반씩 줄이며 "잠긴 부피 = 필요한 부피" 인 높이 찾기
-        mid = (lo + hi) / 2
-        area, _ = _area_and_center(_clip_below_surface([(x, z + mid) for x, z in corners]))
-        lo, hi = (mid, hi) if area * length > volume_needed else (lo, mid)
-    _, buoyancy_side = _area_and_center(_clip_below_surface([(x, z + (lo + hi) / 2) for x, z in corners]))
-    weight_side, _ = turn(com_side, com_up)
-    gz = buoyancy_side - weight_side
-    return -gz if axis == 0 else gz   # 축마다 "일어서는 쪽" 부호를 양수로 맞춤
+# 2026-11-19 측정 (A형, VOXEL_RES 30×8×4 vs 정답 60×32×16)
+#   roll : 10~80° 에서 2~5% 작음 (폭 방향 8칸). pitch: 2% 이내. 90° GZ 는 둘 다 +0.023 m (소실각 90° 넘음)
+LARGE_ANGLE_GZ_TOL = 0.15        # GZ 허용 오차 (측정 최대 약 5% + 상자 때와 같은 여유)
+VANISHING_ANGLE_TOL_DEG = 2.0    # 소실각 허용 오차 [°]
+REFERENCE_RES = (60, 32, 16)     # 정답용 촘촘한 칸 (칸 약 1.5만 개)
 
 
 @pytest.fixture(scope="module")
@@ -699,8 +683,8 @@ def tilt_boat():
     return _boat()
 
 
-def _voxel_gz(tilt_boat, deg, axis):
-    """복셀 부력(water.voxel_buoyancy)으로 잰 GZ [m]. 정답과 같은 방식으로 띄운 뒤 잰다."""
+def _voxel_gz(tilt_boat, deg, axis, voxels=None):
+    """복셀 부력(water.voxel_buoyancy)으로 잰 GZ [m]. voxels 를 안 주면 실제 시뮬레이션 칸(VOXEL_RES)."""
     model, data, bid = tilt_boat
     half = math.radians(deg) / 2
     quat = [math.cos(half), 0.0, 0.0, 0.0]
@@ -711,7 +695,7 @@ def _voxel_gz(tilt_boat, deg, axis):
         data.qpos[0:3] = (0.0, 0.0, z)
         data.qpos[3:7] = quat
         mujoco.mj_forward(model, data)
-        return water.voxel_buoyancy(data, bid, waves=CALM)
+        return water.voxel_buoyancy(data, bid, waves=CALM, voxels=voxels)
 
     lo, hi = -1.0, 1.0
     for _ in range(60):  # 반씩 줄이며 "부력 = 무게" 인 높이 찾기
@@ -720,6 +704,13 @@ def _voxel_gz(tilt_boat, deg, axis):
     forces, points, _ = buoyancy_at((lo + hi) / 2)
     torque = np.cross(points - data.xipos[bid], forces).sum(axis=0)   # 무게중심 기준 회전력
     return -torque[axis] / weight   # GZ = 회전력 ÷ 무게, 일어서는 쪽을 양수로
+
+
+@pytest.fixture(scope="module")
+def exact_gz(tilt_boat):
+    """정답 GZ 함수 (deg, axis) → GZ [m]. 같은 선체 모양을 REFERENCE_RES 칸으로 잘라 잰다."""
+    reference = water.make_hull_voxels(res=REFERENCE_RES)
+    return lambda deg, axis: _voxel_gz(tilt_boat, deg, axis, voxels=reference)
 
 
 def _vanishing_angle(gz_of, start=80.0, stop=110.0, step=0.5):
@@ -734,16 +725,16 @@ def _vanishing_angle(gz_of, start=80.0, stop=110.0, step=0.5):
 
 @pytest.mark.parametrize("axis", [0, 1], ids=["roll", "pitch"])
 @pytest.mark.parametrize("deg", [10, 30, 50, 70, 80])
-def test_large_angle_gz_matches_exact(tilt_boat, axis, deg):
+def test_large_angle_gz_matches_exact(tilt_boat, exact_gz, axis, deg):
     # 큰 각도에서도 복셀 GZ 가 정답과 ±15% 안
-    assert _voxel_gz(tilt_boat, deg, axis) == pytest.approx(_exact_gz(deg, axis), rel=LARGE_ANGLE_GZ_TOL)
+    assert _voxel_gz(tilt_boat, deg, axis) == pytest.approx(exact_gz(deg, axis), rel=LARGE_ANGLE_GZ_TOL)
 
 
 @pytest.mark.parametrize("axis", [0, 1], ids=["roll", "pitch"])
-def test_vanishing_angle_matches_exact(tilt_boat, axis):
+def test_vanishing_angle_matches_exact(tilt_boat, exact_gz, axis):
     # 복원력 소실각이 정답과 ±2° 안, 그리고 전복 기준각(config.Capsize)보다 뒤에 있어야
     # "기준각 전까지는 스스로 일어선다" 는 근거가 성립한다.
-    exact = _vanishing_angle(lambda a: _exact_gz(a, axis))
+    exact = _vanishing_angle(lambda a: exact_gz(a, axis))
     voxel = _vanishing_angle(lambda a: _voxel_gz(tilt_boat, a, axis))
     assert voxel == pytest.approx(exact, abs=VANISHING_ANGLE_TOL_DEG)
     limit = (config.Capsize.ROLL_LIMIT, config.Capsize.PITCH_LIMIT)[axis]
