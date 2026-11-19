@@ -193,7 +193,8 @@
 
 ## 부력·물 저항·수상 견인 시험 (2026-11-13)
 
-- `Water.bind`는 boat의 hull 크기를 모델에서 읽고 `VOXEL_RES`로 복셀화합니다.
+- `Water.bind`는 boat의 hull 크기를 모델에서 읽고 `VOXEL_RES`로 복셀화한 뒤,
+  `config.hull_contains` 밖(A형의 홈·뱃머리 양옆) 칸을 버립니다 (2026-11-19).
   선체 질량·관성을 수정하지 않습니다. 부가질량은 surge·sway만 구현되어 있고 기본값은 꺼져 있습니다
   (`WaterParams.ADDED_MASS_ENABLED = False`, 켤지는 계수 근거 확인 후 팀 회의에서 결정).
 - 부력은 `rho * |model.opt.gravity| * 잠긴 부피`입니다. 각 복셀의 부분 침수와
@@ -218,7 +219,8 @@
 
 ## 목표 접근·정지 제어 첫 단계 (2026-11-13)
 
-- `PhaseManager(world, robot, target_xy, target_heading=...)`는 선체 원점의 월드 xy와 yaw를 목표로 합니다.
+- `PhaseManager(world, robot, target_xy, target_heading=...)`는 배 무게중심(`data.xipos`)의 월드 xy와 yaw를
+  목표로 합니다 (2026-11-19 변경: 원점 → 무게중심. 제자리 회전 중심이라 정착 중 원을 그리지 않음).
   `step()`은 현재 상태 갱신 → 명령 갱신 → acc.reset → parts 순서 add_forces → apply → mj_step →
   상태 갱신을 수행합니다. parts 순서는 world 조립 순서를 따르며 시험은 Water → Robot입니다.
 - 제어 갱신은 Sim.CONTROL_HZ, 물리 스텝은 Sim.TIMESTEP을 유지합니다.
@@ -244,15 +246,15 @@
 - `RescueApproach`는 기존 PhaseManager를 사용하며 TRANSIT → ALIGN_STERN → BACK_IN → READY를 관리합니다.
   물리 스텝은 PhaseManager.step에서 한 번만 실행합니다. 사람·배 위치를 직접 보정하거나 리셋하지 않습니다.
 - 목표는 현재 `lifebuoy_tow_point`의 월드 xy와 지정한 견인 방향입니다.
-  선미 site의 로컬 오프셋과 현재 roll/pitch를 반영해 배 원점의 목표를 계산합니다.
+  선미 site의 무게중심 기준 오프셋과 현재 roll/pitch를 반영해 배 무게중심의 목표를 계산합니다.
   큰 기울기·전복 상황에서의 연결은 이번 범위에 포함하지 않습니다.
 - 현재 형상의 시험용 원호 경유점(반지름 4.5m, 최대 각 간격 30도)을 따라 이동하고,
   선미 간격 3m에서 최종 방향을 정렬한 뒤 최대 목표 속도 0.2m/s로 후진 접근합니다.
-  초기 선체 원점과 구명환 site 거리는 경로 반지름 이상이어야 합니다.
-- READY에는 PhaseManager의 도착 조건, 실제 3D site 간격 0.7m±0.15m,
+  초기 배 무게중심과 구명환 site 거리는 경로 반지름 이상이어야 합니다.
+- READY에는 PhaseManager의 도착 조건, 실제 3D site 간격 1.6m±0.15m(A형: 다리 끝에서 0.7m),
   site 상대속도 0.06m/s 이하가 필요합니다. 추가로 1초 동안 조건을 유지합니다.
   조건이 깨지면 BACK_IN으로 돌아가며, 대기 중에도 작은 위치·속도 보정을 계속합니다.
-- 선체 hull과 사람·구명환의 모든 geom 사이 거리를 제어 주기로 검사합니다.
+- 배 충돌 형상(`Robot.collision_geom_ids`)과 사람·구명환의 모든 geom 사이 거리를 제어 주기로 검사합니다.
   0.1m보다 작으면 추진 명령을 0으로 바꾸고 오류로 시험을 중단합니다.
   접촉 반응·연속 충돌 검출을 대신하는 기능은 아닙니다.
 - `view_rescue --approach-only`는 부력·물 저항이 켜진 잔잔한 물에서 실행하며 tendon은 생성하지 않습니다.
@@ -403,6 +405,18 @@
   제어 갱신·반복 리셋은 호출 측의 책임입니다. 기존 PhaseManager/Watchdog의 단계별 검사 순서는 유지합니다.
 - `rope_visual.draw_rope`는 물리 상태를 변경하지 않고 현재 장력을 이용해 로프를 표시합니다.
   `clear=True`면 기존 표시를 비우며, 미연결 로프는 표시하지 않습니다.
+
+## A형 선체 (2026-11-19)
+
+- `Hull.SHAPE = "a_frame"`: 감싸는 상자 1.5 × 1.2 × 0.2m에서 선미 홈 0.9 × 0.9m와 뱃머리 양옆을 뺀 모양.
+  다리 폭 0.15m, 뱃머리 x 0.45~0.75m에서 반폭 0.6 → 0.2m. 모양 판정은 `config.hull_contains` 한 곳.
+- `Hull.WATERPLANE_AREA`(0.87m²)·`WATERPLANE_CENTER_X`·`WATERPLANE_INERTIA`를 모양에서 계산하며,
+  흘수(`Expect.DRAFT` ≈ 0.022m)·heave 세기·복원력은 L·B 대신 이 값을 씁니다. 상자면 예전 식과 같습니다.
+- `Robot`은 `hull` geom을 투명·접촉 없음(VISUAL 그룹)의 부력 기준 상자로 두고, 실제 충돌 형상
+  `hull_leg_l/r`·`hull_bridge`·`hull_bow`를 PHYSICS 그룹·`Contacts.BOAT`로 만듭니다.
+- 껍데기 무게중심은 모양 중심(x ≈ +0.19m)이며, 부품 배치로 배 무게중심도 x ≈ +0.19m에 맞춰 수평으로 뜹니다.
+- 줄 묶는 점 `Hull.TOW_POINT_B = (0.15, 0, 0.1)` = 홈 앞끝 가운데. 추진기 y ±0.525m(다리 가운데).
+- 구명환은 지금처럼 줄로 뒤에 끌고 갑니다. 홈에 고정해 싣는 것(발사대)은 다음 단계입니다.
 
 ## 최신 main 선체 통합 (2026-11-13)
 
