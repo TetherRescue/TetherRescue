@@ -130,6 +130,107 @@ def make_hull_voxels(size=None, res=None):
     return centers_b[config.hull_contains(centers_b)], cell_size, cell_volume
 
 
+# ─────────────────────────────────────────────────────────────
+# 젖은 겉넓이와 마찰 저항: 배 바닥이 물에 스치면서 생기는 저항
+# ─────────────────────────────────────────────────────────────
+# 마찰 저항은 "물에 닿아 있는 겉넓이"에 비례한다 (잠긴 부피가 아님).
+# 배가 살짝 떠서 잠긴 부피가 줄어도 바닥이 물에 닿아 있는 한 겉넓이는 거의 그대로 → 저항이 남는다.
+#   F = ½ · ρ · V² · S · C_F          S = 젖은 겉넓이 [m²]
+#   C_F = 0.075 / (log10(Re) − 2)²     ITTC-1957 마찰선 (배 저항 추정의 국제 표준식)
+#   Re = V · L / ν                      L = 물에 닿은 길이 [m], ν = WaterParams.KINEMATIC_VISCOSITY
+# ITTC 식은 Re 가 10⁵ 보다 작으면 맞지 않아(아주 느릴 때) 그 아래는 10⁵ 로 계산한다.
+# 이 범위의 마찰은 매우 작고, 느릴 때는 DRAG_LINEAR 선형 저항이 배를 멈춘다.
+FRICTION_RE_MIN = 1e5
+
+
+def make_hull_faces(centers_b, cell_size):
+    """복셀 덩어리의 바깥 면(옆 칸이 비어 있는 면)만 모은다. bind 때 한 번 만든다.
+
+    안쪽 면(칸끼리 맞닿은 면)은 물에 닿을 수 없으니 뺀다. A형 홈 안쪽 벽도 바깥 면이라 포함된다.
+
+    돌려주는 dict
+      centers_b : (면 수, 3) 면 중심 (몸체 좌표)
+      area      : (면 수,) 면 넓이 [m²]
+      edges     : (면 수, 3) 면이 펼쳐진 두 축의 길이 (면에 수직인 축은 0). 기울었을 때 면의 위아래 폭 계산용
+      length    : 복셀 한 칸의 앞뒤 길이 dx [m]. 젖은 길이 계산에 더한다
+    """
+    centers_b = np.asarray(centers_b, dtype=float)
+    cell_size = np.asarray(cell_size, dtype=float)
+    index = np.rint((centers_b - centers_b.min(axis=0)) / cell_size).astype(int)
+    occupied = set(map(tuple, index))
+    face_centers, areas, edges = [], [], []
+    for center, cell in zip(centers_b, index):
+        for axis in range(3):
+            others = [a for a in range(3) if a != axis]
+            for sign in (1, -1):
+                neighbor = cell.copy()
+                neighbor[axis] += sign
+                if tuple(neighbor) in occupied:
+                    continue
+                offset = np.zeros(3)
+                offset[axis] = sign * cell_size[axis] / 2
+                face_centers.append(center + offset)
+                areas.append(cell_size[others[0]] * cell_size[others[1]])
+                edge = cell_size.copy()
+                edge[axis] = 0.0
+                edges.append(edge)
+    return dict(centers_b=np.array(face_centers), area=np.array(areas), edges=np.array(edges),
+                length=float(cell_size[0]))
+
+
+def wetted_surface(data, body_id, faces, t=None, waves=config.WaterParams.WAVES_DEFAULT):
+    """지금 자세에서 물에 닿은 겉넓이 S [m²]와 물에 닿은 앞뒤 길이 L [m].
+
+    면마다 "수면 아래에 있는 비율"을 구해 넓이에 곱한다 (복셀 부력의 잠긴 비율과 같은 방식).
+      바닥처럼 누운 면: 수면 아래면 1, 위면 0
+      옆면처럼 선 면  : (수면 − 면 아래 끝) ÷ 면의 위아래 폭, 0 ~ 1
+    배가 뒤집혀도 같은 식이 맞다 (그때는 갑판 면이 물에 닿음).
+    """
+    if t is None:
+        t = data.time
+    centers_w = frames.point_body_to_world(data, body_id, faces['centers_b'])
+    # 몸체 축 3개가 각각 세상 위쪽으로 얼마나 서 있나 = 회전행렬의 셋째 줄 (월드 z 를 몸체 좌표로 돌린 것)
+    up_b = frames.world_to_body(data, body_id, np.array([0.0, 0.0, 1.0]))
+    extent = faces['edges'] @ np.abs(up_b)                     # 면마다 위아래 폭 [m]
+    surface = wave_height(centers_w[:, 0], centers_w[:, 1], t, waves)
+    bottom = centers_w[:, 2] - extent / 2
+    flat = extent < 1e-9
+    wet = np.where(flat, (centers_w[:, 2] < surface).astype(float),
+                   np.clip((surface - bottom) / np.where(flat, 1.0, extent), 0.0, 1.0))
+    area = float(faces['area'] @ wet)
+    if not np.any(wet > 0):
+        return 0.0, 0.0
+    x_b = faces['centers_b'][wet > 0, 0]
+    return area, float(x_b.max() - x_b.min() + faces['length'])
+
+
+def friction_coefficient(speed, length, viscosity=None):
+    """ITTC-1957 마찰 계수 C_F = 0.075 / (log10(Re) − 2)². Re 는 FRICTION_RE_MIN 아래로 내리지 않는다."""
+    if viscosity is None:
+        viscosity = config.WaterParams.KINEMATIC_VISCOSITY
+    reynolds = max(speed * length / viscosity, FRICTION_RE_MIN)
+    return 0.075 / (math.log10(reynolds) - 2.0) ** 2
+
+
+def friction_drag(model, data, body_id, area, length):
+    """젖은 겉넓이에 걸리는 마찰 저항 (월드 좌표). 바닥을 따라 미끄러지는 방향(몸체 앞뒤·좌우)에만 건다.
+
+    F_b = −½ · ρ · C_F · S · |v_t| · v_t,   v_t = 물에 대한 몸체 앞뒤·좌우 속도 (위아래 빼고)
+    """
+    if area <= 0.0:
+        return np.zeros(3)
+    vel_w, _ = frames.body_velocity_w(model, data, body_id)
+    rel_vel_w = vel_w - np.asarray(config.WaterParams.WATER_VELOCITY_W, dtype=float)
+    tangent_b = frames.world_to_body(data, body_id, rel_vel_w)
+    tangent_b[2] = 0.0
+    speed = float(np.linalg.norm(tangent_b))
+    if speed == 0.0:
+        return np.zeros(3)
+    c_f = friction_coefficient(speed, length)
+    force_b = -0.5 * config.Physics.RHO_WATER * c_f * area * speed * tangent_b
+    return frames.body_to_world(data, body_id, force_b)
+
+
 def voxel_buoyancy(data, body_id, t=None, waves=config.WaterParams.WAVES_DEFAULT, voxels=None,
                    gravity=config.Physics.GRAVITY):
     """지금 MuJoCo 상태(data)에서 몸체의 칸마다 부력과 작용점 (월드 좌표).
@@ -429,6 +530,8 @@ class Water:
         self.body_id = None
         self.voxels = None
         self.submerged_volume = 0.0
+        self.wetted_area = 0.0                 # 뷰어·디버깅용: 배의 젖은 겉넓이 [m²]
+        self.friction_force_w = np.zeros(3)    # 뷰어·디버깅용: 배의 마찰 저항 (월드) [N]
         if self.include_boat:
             def find(obj, name):
                 # 이름이 틀리면 −1 이 조용히 들어가지 않도록 assert 로 바로 멈춘다
@@ -458,7 +561,9 @@ class Water:
             mass = model.body_subtreemass[body_id]
             coeffs = boat_drag_coefficients(mass, model.body_inertia[body_id], size,
                                             float(np.linalg.norm(model.opt.gravity)))
-            self.targets.append(dict(body_id=body_id, voxels=voxels, coeffs=coeffs))
+            # 마찰 저항용 바깥 면 (배에만). 사람·구명환은 RescueWater 계수가 마찰까지 대신한다
+            self.targets.append(dict(body_id=body_id, voxels=voxels, coeffs=coeffs,
+                                     faces=make_hull_faces(voxels[0], cell_size)))
             seen.add(body_id)
             if config.WaterParams.ADDED_MASS_ENABLED:
                 self.added_mass_b = added_mass(mass)   # heave 값이 있거나 계수 ≥ 1 이면 여기서 에러
@@ -496,6 +601,8 @@ class Water:
         if current.shape != (3,) or not np.isfinite(current).all():
             raise ValueError("물 속도는 유한한 월드 벡터여야 합니다.")
         self.submerged_volume = 0.0
+        self.wetted_area = 0.0
+        self.friction_force_w = np.zeros(3)
         for target in self.targets:
             body_id = target['body_id']
             forces_w, points_w, volume = voxel_buoyancy(data, body_id, waves=self.waves,
@@ -518,6 +625,13 @@ class Water:
             coeffs = wetted_drag(target['coeffs'], wet_ratio, damping_scale)
             force_w, torque_w = water_drag(model, data, body_id, coeffs,
                                            heave_world_only=(body_id == self.body_id))
+            # 배 바닥 마찰 저항 (2026-11-20, 동경 님 요청 "떠올라도 저항이 사라지지 않게").
+            #   위 저항은 잠긴 부피 비율로 줄지만, 마찰은 젖은 겉넓이 기준이라 배가 살짝 떠도 바닥이 닿아 있으면 남는다.
+            if 'faces' in target:
+                area, length = wetted_surface(data, body_id, target['faces'], waves=self.waves)
+                friction_w = friction_drag(model, data, body_id, area, length)
+                self.wetted_area, self.friction_force_w = area, friction_w
+                force_w = force_w + friction_w
             # 저항은 물에 잠긴 부분이 받으므로 잠긴 부분의 가운데(= 부력 중심)에 건다 (2026-11-20).
             #   무게중심에 걸면, 무게중심보다 아래(선체 바닥)를 미는 추진기가 선수를 드는 돌림힘을
             #   상쇄하는 힘이 없어 고속에서 선수가 계속 들렸다. 중력 0 등으로 부력 중심이 없으면 무게중심.

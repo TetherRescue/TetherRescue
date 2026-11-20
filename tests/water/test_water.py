@@ -822,3 +822,76 @@ def test_drag_acts_at_center_of_buoyancy():
     buoyancy, drag = loads[0], loads[1]
     assert buoyancy[3] is not None
     np.testing.assert_allclose(drag[3], buoyancy[3])
+
+
+# ─────────────────────────────────────────────────────────────
+# 마찰 저항: 젖은 겉넓이 기준이라 배가 살짝 떠도 남아야 한다 (2026-11-20, 동경 님 요청)
+# ─────────────────────────────────────────────────────────────
+def test_friction_coefficient_matches_ittc_1957():
+    # Re = 10⁷ → C_F = 0.075 / (7 − 2)² = 0.003 (ITTC-1957 마찰선 정의값)
+    nu = config.WaterParams.KINEMATIC_VISCOSITY
+    assert water.friction_coefficient(10.0, 1e7 * nu / 10.0) == pytest.approx(0.003)
+    # 아주 느리면 Re 를 10⁵ 로 두고 계산 (log10 이 2 근처로 가며 터지지 않게)
+    assert water.friction_coefficient(0.0, 1.5) == pytest.approx(0.075 / 3.0 ** 2)
+
+
+def test_hull_faces_cover_bottom_once():
+    # 바깥 면 중 아래를 보는 면(바닥)의 넓이 = 바닥 칸 개수 × dx·dy. 안쪽 면은 없어야 함
+    centers_b, cell_size, _ = water.make_hull_voxels()
+    faces = water.make_hull_faces(centers_b, cell_size)
+    bottom = np.isclose(faces['centers_b'][:, 2], centers_b[:, 2].min() - cell_size[2] / 2)
+    columns = {(round(x, 6), round(y, 6)) for x, y, _ in centers_b}
+    assert faces['area'][bottom].sum() == pytest.approx(len(columns) * cell_size[0] * cell_size[1])
+
+
+def _bottom_area(faces):
+    lowest = faces['centers_b'][:, 2].min()
+    return float(faces['area'][np.isclose(faces['centers_b'][:, 2], lowest)].sum())
+
+
+def test_wetted_surface_floating_is_bottom_plus_thin_sides():
+    # 떠 있는 배: 바닥 전체 + 옆면은 흘수(약 2 cm)만큼만 → 바닥 넓이보다 조금 큼
+    world, water_part, robot = _sim_world()
+    _run(world, 3.0)
+    faces = water_part.targets[0]['faces']
+    area, length = water.wetted_surface(world.data, robot.body_id, faces, waves=CALM)
+    bottom = _bottom_area(faces)
+    assert bottom < area < 1.3 * bottom
+    assert length == pytest.approx(config.Hull.LENGTH, abs=0.06)
+
+
+def test_wetted_surface_out_of_water_is_zero():
+    world, water_part, robot = _sim_world(lift=1.0)
+    area, length = water.wetted_surface(world.data, robot.body_id, water_part.targets[0]['faces'], waves=CALM)
+    assert area == 0.0 and length == 0.0
+
+
+def test_friction_remains_when_boat_barely_touches_water():
+    # 배를 들어 바닥만 3 mm 잠기게 한 뒤 5 m/s 로 앞으로 → 잠긴 부피는 평소의 약 1/7 이지만
+    # 바닥은 다 젖어 있으므로 마찰 저항은 바닥 넓이 기준 값 이상이어야 한다 (예전엔 저항이 부피 따라 줄었음)
+    world, water_part, robot = _sim_world()
+    adr, dof = robot.qpos_adr, world.model.body_dofadr[robot.body_id]
+    draft = config.Hull.HEIGHT / 2 - world.data.qpos[adr + 2]
+    world.data.qpos[adr + 2] += draft - 0.003
+    world.data.qvel[dof:dof + 6] = 0.0
+    world.data.qvel[dof] = 5.0
+    mujoco.mj_forward(world.model, world.data)
+    faces = water_part.targets[0]['faces']
+    area, length = water.wetted_surface(world.data, robot.body_id, faces, waves=CALM)
+    friction = water.friction_drag(world.model, world.data, robot.body_id, area, length)
+    expected = 0.5 * config.Physics.RHO_WATER * 25.0 * _bottom_area(faces) * water.friction_coefficient(5.0, length)
+    assert friction[0] < 0                      # 앞으로 가면 뒤로
+    assert -friction[0] >= expected             # 바닥 전체 넓이 이상의 마찰
+    assert abs(friction[2]) < 1e-9              # 마찰은 위아래로 밀지 않음
+
+
+def test_friction_added_to_boat_drag_only():
+    # 물 모듈은 배에만 마찰 면을 만든다 (사람·구명환은 RescueWater 계수 그대로)
+    world, water_part, robot = _sim_world()
+    assert [('faces' in t) for t in water_part.targets] == [True]
+    world.data.qvel[world.model.body_dofadr[robot.body_id]] = 3.0
+    mujoco.mj_forward(world.model, world.data)
+    world.acc.reset()
+    water_part.add_forces(world.model, world.data, world.acc)
+    assert water_part.wetted_area > 0
+    assert water_part.friction_force_w[0] < 0
