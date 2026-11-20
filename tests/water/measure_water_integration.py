@@ -26,8 +26,9 @@ def measure(case, nozzle_cutoff=True):
     tow_human = tow_rope = None
     if case == 'waves_boat':
         water = Water(waves=waves)
-        robot = Robot(surface_height=water.wave_height if nozzle_cutoff else None)
-        world = build_world(parts=[water, robot])
+        robot = Robot()
+        world = build_world(parts=[water, robot])   # 조립 때 수면 함수가 자동 연결됨 → 끔 비교는 아래에서 덮어씀
+        robot.surface_height = water.wave_height if nozzle_cutoff else None
         limit = 30.
     elif case == 'waves_towing':
         world, robot, tow_human, tow_rope = build_surface_towing_world()

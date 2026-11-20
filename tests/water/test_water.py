@@ -546,6 +546,29 @@ def test_roll_release_settles():
     assert abs(_roll_deg(world)) < 0.5
 
 
+def test_build_world_connects_surface_to_robot():
+    # 파도-로봇 연동 (WaterAPI.SHARED_STATE: 함수 전달): 조립하면 로봇이 이 물의 wave_height 를 받는다
+    _, water_part, robot = _sim_world()
+    assert robot.surface_height == water_part.wave_height
+    # 물 객체의 파도를 바꾸면 로봇이 보는 수면도 같이 바뀜 (같은 물을 봄)
+    water_part.waves = ((0.5, 8.0, 0.0, 0.0),)
+    assert robot.surface_height(0.0, 0.0, 0.0) == pytest.approx(0.5)
+
+
+def test_build_world_keeps_explicit_surface():
+    # 직접 준 수면 함수는 덮어쓰지 않음
+    def own(x, y, t):
+        return np.zeros_like(np.asarray(x, dtype=float))
+    world = build_world(parts=(Water(waves=CALM), Robot(surface_height=own)))
+    assert world.parts[1].surface_height is own
+
+
+def test_no_water_no_connection():
+    # 물이 없으면 연결할 수면도 없음 → 1주차 가정 "항상 물속" 그대로
+    world = build_world(parts=(Robot(),), gravity=0)
+    assert world.parts[0].surface_height is None
+
+
 # ─────────────────────────────────────────────────────────────
 # 7. 부가질량 (surge·sway 만. heave·yaw·결합항은 아직 없음)
 # ─────────────────────────────────────────────────────────────

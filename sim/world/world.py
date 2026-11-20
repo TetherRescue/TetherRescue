@@ -63,6 +63,25 @@ def check_geom_table(model):
         raise ValueError("config.Groups·Contacts 표와 맞지 않는 geom이 있습니다:\n  " + "\n  ".join(problems))
 
 
+def _connect_surface(parts):
+    """파도-로봇 연동 (WaterAPI.SHARED_STATE: 함수 전달). 조립 단계에서 한 번만 연결한다.
+
+    세계에 Water 가 하나 있으면, 수면 함수가 비어 있는 Robot 에 water.wave_height 를 넘긴다.
+    그러면 노즐이 수면 위로 나온 스텝에는 그 노즐 추력이 0 이 된다 (Robot.nozzles_submerged).
+    이미 surface_height 를 직접 준 Robot 은 건드리지 않는다. Water 가 없거나 둘 이상이면 연결하지 않는다.
+    모듈끼리 서로 import 하지 않도록 조립하는 world.py 에서 연결한다.
+    """
+    from sim.water.water import Water
+    from sim.robot.robot import Robot
+
+    waters = [p for p in parts if isinstance(p, Water)]
+    if len(waters) != 1:
+        return
+    for part in parts:
+        if isinstance(part, Robot) and part.surface_height is None:
+            part.surface_height = waters[0].wave_height
+
+
 def build_world(*, parts=None, timestep=None, gravity=None, integrator=None):
     """모듈 build → compile → bind 후 초기 상태까지 준비한다.
 
@@ -96,6 +115,7 @@ def build_world(*, parts=None, timestep=None, gravity=None, integrator=None):
         # 실제 로봇 연결점·연결 시점 합의 전에는 기본 세계에 줄을 생성하지 않는다.
         parts = (Water(), Robot(), Human(), Lifebuoy(), Tether(enabled=False))
     parts = tuple(parts)
+    _connect_surface(parts)
     for part in parts:
         max_dt = part.REQUIRES.get("max_dt")
         if max_dt is not None and timestep > _positive(max_dt, "REQUIRES.max_dt"):
