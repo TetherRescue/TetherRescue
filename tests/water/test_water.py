@@ -740,3 +740,33 @@ def test_vanishing_angle_matches_exact(tilt_boat, exact_gz, axis):
     limit = (config.Capsize.ROLL_LIMIT, config.Capsize.PITCH_LIMIT)[axis]
     if limit is not None:
         assert math.radians(min(exact, voxel)) > limit
+
+
+# ─────────────────────────────────────────────────────────────
+# 고속 가짜 양력 회귀 시험 (2026-11-20, 동경 님 제기: 빨라지면 떠올라 저항이 0 이 됨)
+# ─────────────────────────────────────────────────────────────
+def test_forward_speed_does_not_lift_pitched_boat():
+    # 선수를 5° 든 배가 5 m/s 로 앞으로만 달릴 때, heave 저항이 배를 위로 밀면 안 된다.
+    #   예전: 앞 속도 일부가 배 기준 z 속도로 섞여 heave 저항(바닥 넓이 · Cd 1.5)이 위로 수백 N 을 냈다.
+    #   지금: heave 저항은 월드 위아래 속도로만 계산 → 위쪽 힘이 없어야 한다 (앞뒤 저항의 기울어진 성분만 아래로).
+    world, water_part, robot = _sim_world()
+    adr, dof = robot.qpos_adr, world.model.body_dofadr[robot.body_id]
+    half = math.radians(-5) / 2                       # y 축(왼쪽) 둘레 음수 회전 = 선수가 들림
+    world.data.qpos[adr + 3:adr + 7] = (math.cos(half), 0, math.sin(half), 0)
+    world.data.qvel[dof:dof + 6] = 0.0
+    world.data.qvel[dof] = 5.0                        # 월드 +x 로 5 m/s
+    mujoco.mj_forward(world.model, world.data)
+    force_w, _ = water.water_drag(world.model, world.data, robot.body_id, water_part.targets[0]['coeffs'])
+    assert force_w[0] < 0                             # 앞으로 가면 뒤로 미는 저항은 그대로
+    assert force_w[2] <= 1e-9                         # 위로 띄우는 힘은 없음
+
+
+def test_drag_acts_at_center_of_buoyancy():
+    # 저항은 잠긴 부분 가운데(부력 중심)에 걸려야 한다. 무게중심에 걸면 추진기의 선수 들림 돌림힘을 못 막음.
+    world, water_part, robot = _sim_world()
+    world.acc.reset()
+    water_part.add_forces(world.model, world.data, world.acc)
+    loads = [load for load in world.acc._loads if load[0] == robot.body_id]
+    buoyancy, drag = loads[0], loads[1]
+    assert buoyancy[3] is not None
+    np.testing.assert_allclose(drag[3], buoyancy[3])

@@ -331,6 +331,13 @@ def water_drag(model, data, body_id, coeffs):
     rel_vel_b = frames.world_to_body(data, body_id, rel_vel_w)
     omega_b = frames.world_to_body(data, body_id, omega_w)
 
+    # 3-1) heave(위아래) 저항은 "실제로 위아래로 움직이는 속도"로만 계산한다 (2026-11-20, 동경 님 고속 문제 제기).
+    #   배가 기울면 앞으로 가는 속도 일부가 배 기준 z 축에 섞인다. 이걸 그대로 쓰면 큰 heave 계수
+    #   (바닥 전체 넓이 · Cd 1.5, 감쇠비 선형 항)가 앞으로 달리는 배를 위로 밀어 올리는 가짜 양력이 되어,
+    #   고속에서 배가 뜨고 → 잠긴 부피가 줄어 저항이 줄고 → 더 빨라지는 되먹임으로 물 밖까지 날아갔다.
+    #   → 월드 위아래 속도만 배 기준으로 돌려 heave 칸에 쓴다. 앞으로 달릴 때 생기는 활주 양력은 따로 넣는다.
+    rel_vel_b[2] = frames.world_to_body(data, body_id, np.array([0.0, 0.0, rel_vel_w[2]]))[2]
+
     # 4) 축마다 저항
     force_b, torque_b = drag_b(rel_vel_b, omega_b, coeffs)
 
@@ -493,6 +500,7 @@ class Water:
             # 칸별 부력을 합력 하나로: 크기 = 합, 작용점 = 부력 가중 평균 (토크가 같음)
             #   중력 0 이면 부력도 0 → 작용점을 구할 수 없으니 건너뛰고 저항만 건다
             lift = forces_w[:, 2]
+            center_w = None
             if lift.sum() > 0:
                 center_w = (points_w * lift[:, None]).sum(axis=0) / lift.sum()
                 acc.add(body_id, [0.0, 0.0, lift.sum()], point_w=center_w)
@@ -502,7 +510,10 @@ class Water:
             damping_scale = min(1.0, volume * config.Physics.RHO_WATER / model.body_subtreemass[body_id])
             coeffs = wetted_drag(target['coeffs'], wet_ratio, damping_scale)
             force_w, torque_w = water_drag(model, data, body_id, coeffs)
-            acc.add(body_id, force_w, torque_w=torque_w)
+            # 저항은 물에 잠긴 부분이 받으므로 잠긴 부분의 가운데(= 부력 중심)에 건다 (2026-11-20).
+            #   무게중심에 걸면, 무게중심보다 아래(선체 바닥)를 미는 추진기가 선수를 드는 돌림힘을
+            #   상쇄하는 힘이 없어 고속에서 선수가 계속 들렸다. 중력 0 등으로 부력 중심이 없으면 무게중심.
+            acc.add(body_id, force_w, torque_w=torque_w, point_w=center_w)
 
             # 부가질량도 감쇠처럼 물 밖으로 나오면 줄어든다 (같이 밀 물이 없으므로)
             if body_id == self.body_id and accel_w is not None:
