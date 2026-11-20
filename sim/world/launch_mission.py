@@ -135,6 +135,7 @@ class LaunchMission:
         model, data = self.world.model, self.world.data
         mujoco.mj_copyData(data, model, self._initial)
         self.robot.reset_winch(model)
+        self.robot.reset_inversion(model)
         self.launcher.reset(model, data)
         self.grasp.reset(model, data)
         self.robot.set_command(0, 0)
@@ -158,7 +159,7 @@ class LaunchMission:
                      held=grab['held'], hand_gap=grab['distance'], hand_relative_speed=grab['relative_speed'],
                      tension=self.rope.tension(model, data), tow_progress=progress,
                      human_speed=float(np.linalg.norm(velocity[:2])),
-                     shot=self.launcher.shot, landing=self.landing)
+                     shot=self.launcher.shot, landing=self.landing, inverted=self.robot.inverted)
         if self.failed:
             state.update(failure_code=self.failure.code.value, failure_message=self.failure.message,
                          failure_time=self.failure.time)

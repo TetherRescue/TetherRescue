@@ -50,12 +50,14 @@ def test_rope_reaction_preserves_total_linear_momentum_without_thrust():
     initial_distance = world.data.ten_length[rope.tendon_id]
     for _ in range(500):
         advance(world)
-    momentum = np.zeros(3)
-    for body_id in range(1, world.model.nbody):
-        velocity, _ = body_velocity_w(world.model, world.data, body_id)
-        momentum += world.model.body_mass[body_id] * velocity
-    # 총 322kg. RK4 측정 오차 ≈ 0.002 kg·m/s (잔여 속도 약 6e-6 m/s) → 여유를 두고 5e-3 허용.
-    np.testing.assert_allclose(momentum, 0, atol=5e-3)
+    # 몸체마다 원점 속도 × 질량은 무게중심이 원점에서 떨어진 몸체(A형 배, 카메라 팔)에서 틀리므로
+    # MuJoCo 가 계산한 전체 무게중심 속도 × 전체 질량으로 잰다 (2026-11-19)
+    mujoco.mj_subtreeVel(world.model, world.data)
+    momentum = world.model.body_subtreemass[0] * world.data.subtree_linvel[0]
+    # 총 322kg. RK4 측정 오차 ≈ 0.002 kg·m/s (잔여 속도 약 6e-6 m/s).
+    # 2026-11-19: 카메라 회전 팔(경첩 하나)이 생겨 줄에 홱 당겨진 배가 빠르게 돌 때 오차 ≈ 0.008 (팔 모터를 꺼도 0.004)
+    #   → 1e-2 허용 (속도로 약 3e-5 m/s). 팔 힘이 안쪽 힘이라는 건 tests/robot/test_inversion.py 가 1e-6 으로 확인.
+    np.testing.assert_allclose(momentum, 0, atol=1e-2)
     assert world.data.ten_length[rope.tendon_id] < initial_distance
     assert world.data.xpos[robot.body_id, 0] < 4
     assert world.data.xpos[human.body_id, 0] > 0

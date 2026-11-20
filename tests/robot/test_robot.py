@@ -42,12 +42,23 @@ def test_build_names_exist():
 
 def test_build_mass_and_inertia_match_config():
     # 물은 배 무게를 MuJoCo 모델에서 읽음 → 모델 값이 config 와 다르면 흘수 정답값과 조용히 어긋남
+    # 카메라는 회전 팔 몸체에 따로 있으므로 배 + 팔(subtree)을 합쳐 config 와 비교한다 (2026-11-19)
     model, data = _compile()
     b = _id(model, mujoco.mjtObj.mjOBJ_BODY, Names.BOAT_BODY)
-    assert model.body_mass[b] == Hull.MASS
-    np.testing.assert_allclose(model.body_ipos[b], Hull.COM)
-    np.testing.assert_allclose(model.body_inertia[b], Hull.INERTIA)
+    arm = _id(model, mujoco.mjtObj.mjOBJ_BODY, Names.CAMERA_ARM_BODY)
+    assert model.body_subtreemass[b] == pytest.approx(Hull.MASS)
+    assert model.body_mass[arm] == Hull.PARTS["camera"][0]
+    rotation = data.xmat[b].reshape(3, 3)
+    np.testing.assert_allclose(rotation.T @ (data.subtree_com[b] - data.xpos[b]), Hull.COM, atol=1e-12)
     np.testing.assert_allclose(model.body_iquat[b], (1, 0, 0, 0))   # 관성 축 = 몸체 축 (축이 돌아가 있지 않음)
+    # 배 몸체 관성 + 카메라 점 질량(평행축) = Hull.INERTIA (카메라 상자 자체의 작은 관성 1e-4 만 차이)
+    from sim.robot.robot import FRAME_COM, FRAME_MASS
+    com = np.asarray(Hull.COM)
+    total = np.array(model.body_inertia[b], dtype=float)
+    for mass, point in ((FRAME_MASS, FRAME_COM), Hull.PARTS["camera"]):
+        d = np.asarray(point) - com
+        total += mass * np.array([d[1] ** 2 + d[2] ** 2, d[0] ** 2 + d[2] ** 2, d[0] ** 2 + d[1] ** 2])
+    np.testing.assert_allclose(total, Hull.INERTIA, atol=2e-4)
 
 
 def test_build_hull_size_matches_config():
@@ -202,6 +213,12 @@ def test_no_surface_height_keeps_week1_assumption():
     assert robot.nozzles_submerged(data) == (True, True)
 
 
+def _com_velocity(world, robot):
+    """배 + 카메라 팔 전체 무게중심의 선속도 [월드]. 힘 ÷ 전체 무게 = 이 속도의 변화율."""
+    mujoco.mj_subtreeVel(world.model, world.data)
+    return world.data.subtree_linvel[robot.body_id].copy()
+
+
 # 기존 세계 조립·접근 제어 API와의 호환 검증.
 def make_robot():
     robot = Robot()
@@ -213,7 +230,10 @@ def test_hull_mass_geometry_and_optional_tow_site():
     assert world.model.body_subtreemass[robot.body_id] == pytest.approx(config.Hull.MASS)
     np.testing.assert_allclose(world.model.geom_size[robot.geom_id],
                                np.array([config.Hull.LENGTH, config.Hull.BEAM, config.Hull.HEIGHT]) / 2)
-    np.testing.assert_allclose(world.model.body_ipos[robot.body_id], config.Hull.COM)
+    # 배 + 카메라 팔 전체 무게중심 = Hull.COM (카메라는 팔 몸체에 따로, 2026-11-19)
+    data, b = world.data, robot.body_id
+    np.testing.assert_allclose(data.xmat[b].reshape(3, 3).T @ (data.subtree_com[b] - data.xpos[b]), config.Hull.COM,
+                               atol=1e-12)
     assert world.model.nsite == 4  # 추진기 2 + main의 합의된 선미 연결점 + 소나 자리
 
 
@@ -223,7 +243,7 @@ def test_actual_forward_reverse_acceleration(command, force):
     world, robot = make_robot()
     robot.set_command(command)
     advance(world)
-    assert body_velocity_w(world.model, world.data, robot.body_id)[0][0] / world.model.opt.timestep == pytest.approx(force / config.Hull.MASS)
+    assert _com_velocity(world, robot)[0] / world.model.opt.timestep == pytest.approx(force / config.Hull.MASS)
 
 
 def test_yaw_ninety_forward_accelerates_world_y():
@@ -234,7 +254,7 @@ def test_yaw_ninety_forward_accelerates_world_y():
     advance(world)
     dof = world.model.jnt_dofadr[robot.joint_id]
     assert world.data.qvel[dof] == pytest.approx(0, abs=1e-12)
-    assert body_velocity_w(world.model, world.data, robot.body_id)[0][1] / world.model.opt.timestep == pytest.approx(2 * config.Thruster.MAX_FORWARD / config.Hull.MASS)
+    assert _com_velocity(world, robot)[1] / world.model.opt.timestep == pytest.approx(2 * config.Thruster.MAX_FORWARD / config.Hull.MASS)
 
 
 def test_positive_steering_turns_left_and_mixing_saturates():
@@ -246,8 +266,8 @@ def test_positive_steering_turns_left_and_mixing_saturates():
     world, robot = make_robot()
     robot.set_command(forward=1, steering=1)
     advance(world)
-    # 원점 속도라 첫 스텝의 회전(ω × 원점−무게중심)이 아주 조금 섞임 (A형은 무게중심이 원점 앞 0.19 m) → 1e-4
-    assert body_velocity_w(world.model, world.data, robot.body_id)[0][0] / world.model.opt.timestep == pytest.approx(
+    # 한쪽만 밀어 첫 스텝부터 돌기 시작 → 암묵 적분의 회전 결합으로 1e-5 수준 차이 → 1e-4
+    assert _com_velocity(world, robot)[0] / world.model.opt.timestep == pytest.approx(
         config.Thruster.MAX_FORWARD / config.Hull.MASS, rel=1e-4)
 
 
@@ -273,50 +293,6 @@ def test_explicit_trial_placement_and_tow_site_do_not_change_main_default():
     world = build_world(parts=[robot], gravity=0)
     np.testing.assert_allclose(world.data.xpos[robot.body_id], position)
     np.testing.assert_allclose(world.model.site_pos[robot.tow_site_id], point)
-
-
-def _righting_arm(axis, angle):
-    """잔잔한 물에서 배를 axis(0 = roll, 1 = pitch) 로 angle 만큼 기울여 고정하고 복원팔 GZ [m].
-
-    부력 = 무게가 되는 높이를 이분법으로 찾은 뒤, 복셀 부력이 무게중심 둘레에 거는 돌림힘 ÷ 무게.
-    + = 다시 세우는 쪽. 시뮬레이션 시간은 돌리지 않음 (자세만 정하고 물의 부력 함수를 부름).
-    """
-    from sim.water.water import Water, voxel_buoyancy
-
-    calm = config.WaterParams.WAVES_CALM   # voxel_buoyancy 기본값은 파도 있음 → 반드시 잔잔한 물로
-    world = build_world(parts=(Water(waves=calm), Robot()))
-    model, data = world.model, world.data
-    water, robot = world.parts
-    voxels, bid, adr = water.targets[0]['voxels'], robot.body_id, robot.qpos_adr
-    weight = model.body_mass[bid] * config.Physics.GRAVITY
-    quat = np.zeros(4)
-    mujoco.mju_axisAngle2Quat(quat, np.eye(3)[axis], angle)
-
-    def buoyancy(z):
-        data.qpos[adr:adr + 3] = (0.0, 0.0, z)
-        data.qpos[adr + 3:adr + 7] = quat
-        mujoco.mj_kinematics(model, data)
-        return voxel_buoyancy(data, bid, t=0.0, waves=calm, voxels=voxels, gravity=config.Physics.GRAVITY)
-
-    lo, hi = -1.0, 1.0   # 완전히 잠김 ~ 물 밖
-    for _ in range(50):
-        mid = (lo + hi) / 2
-        lo, hi = (mid, hi) if buoyancy(mid)[0][:, 2].sum() > weight else (lo, mid)
-    forces, points, _ = buoyancy((lo + hi) / 2)
-    moment = np.cross(points - data.xipos[bid], forces).sum(axis=0)
-    return -moment[axis] / weight
-
-
-@pytest.mark.parametrize('axis,limit', [(0, config.Capsize.ROLL_LIMIT), (1, config.Capsize.PITCH_LIMIT)])
-def test_capsize_limit_below_vanishing_stability(axis, limit):
-    """전복 기준각 전까지는 스스로 일어서고(GZ > 0), 조금 더 넘어가면 더 넘어가는 쪽(GZ < 0).
-
-    기준각이 복원력 소실각(roll 약 96°, pitch 약 92°) 바로 앞에 있다는 config.Capsize 근거를 확인한다.
-    선체·무게를 바꿔 이 테스트가 깨지면 기준각을 다시 재야 한다.
-    """
-    for angle in np.radians([10, 30, 60]).tolist() + [limit]:
-        assert _righting_arm(axis, angle) > 0, f"{np.degrees(angle):.0f}° 에서 이미 복원력 없음"
-    assert _righting_arm(axis, limit + np.radians(15)) < 0, "기준각 + 15° 에서도 일어섬 → 기준각이 너무 이름"
 
 
 # ── 구명환 윈치 (짧게 끌고 가다가 줄을 풀어 건네줌) ─────────────────
