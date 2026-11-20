@@ -35,7 +35,7 @@ python tests/water/measure_water_integration.py --case all
 ## 해석 한계
 
 - 파도는 수면 높이 함수다. 물 입자의 파도 속도·워터젯 성능 곡선·침수·흡입 환기·캐비테이션을 재현하지 않는다. 파도 시나리오 성공도 실제 해상 안전성의 증거는 아니다.
-- 구조 장면은 구명환이 처음부터 `Lifebuoy(attached=True)`로 사람과 weld 연결된 상태다. 로프만 접근 후 연결된다. 실제 구명환 전달·잡기·착용 절차가 검증된 것은 아니다.
+- 구조 장면은 구명환이 처음부터 `Lifebuoy(attached=True)`로 사람과 weld 연결된 상태다. 로프만 접근 후 연결된다. 실제 구명환 전달·잡기·착용 절차가 검증된 것은 아니다. 구명환 발사·잡기·착용은 `sim/world/launch_mission.py`, `GraspDemo`, `WearDemo`(`sim/world/scenarios.py`)에서 별도로 다루며, 이 문서의 물 통합 측정에는 포함되지 않는다.
 - 실물 속도·추력·저항 계수 근거 검토는 [실물 타당성 자료 검토](PHYSICAL_VALIDITY_REVIEW.md)에 분리했다. 해당 설계의 실측이 없어 실물 타당성은 미확정이다.
 - 원격 CI·PR merge는 이번 로컬 검증과 별개이며 실행하지 않았다.
 
