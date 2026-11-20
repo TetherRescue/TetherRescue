@@ -305,8 +305,12 @@ def drag_b(vel_b, omega_b, coeffs):
     return force_b, torque_b
 
 
-def water_drag(model, data, body_id, coeffs):
+def water_drag(model, data, body_id, coeffs, heave_world_only=False):
     """지금 MuJoCo 상태에서 배가 받는 물 저항 (월드 좌표). 힘은 무게중심에 작용한다.
+
+    heave_world_only: True 면 몸체 z 축(heave) 저항을 세상 위아래 속도로만 계산한다 (아래 3-1).
+      몸체 z 축이 위를 향한다고 가정하는 보정이라 배에만 쓴다. 사람·구명환은 몸체 축이 어디로든 누울 수 있어
+      (예: 착수한 환은 몸체 z 축이 옆을 향함) 켜면 그 축의 저항이 사라진다 → 기본값 False.
 
     순서
       1) 배 속도를 세상 기준으로 받는다 (무게중심의 이동 속도, 회전 속도)
@@ -336,7 +340,10 @@ def water_drag(model, data, body_id, coeffs):
     #   (바닥 전체 넓이 · Cd 1.5, 감쇠비 선형 항)가 앞으로 달리는 배를 위로 밀어 올리는 가짜 양력이 되어,
     #   고속에서 배가 뜨고 → 잠긴 부피가 줄어 저항이 줄고 → 더 빨라지는 되먹임으로 물 밖까지 날아갔다.
     #   → 월드 위아래 속도만 배 기준으로 돌려 heave 칸에 쓴다. 앞으로 달릴 때 생기는 활주 양력은 따로 넣는다.
-    rel_vel_b[2] = frames.world_to_body(data, body_id, np.array([0.0, 0.0, rel_vel_w[2]]))[2]
+    #   배에만 적용 (heave_world_only). 사람·구명환에 쓰면 몸체 z 축이 옆을 향할 때 그 방향 저항이 0 이 되어,
+    #   착수한 환이 멈추지 않고 미끄러졌다 (2026-11-20, 발사 미션 ATTACH 시간 초과의 원인).
+    if heave_world_only:
+        rel_vel_b[2] = frames.world_to_body(data, body_id, np.array([0.0, 0.0, rel_vel_w[2]]))[2]
 
     # 4) 축마다 저항
     force_b, torque_b = drag_b(rel_vel_b, omega_b, coeffs)
@@ -509,7 +516,8 @@ class Water:
             wet_ratio = volume / (len(points_w) * target['voxels'][2])
             damping_scale = min(1.0, volume * config.Physics.RHO_WATER / model.body_subtreemass[body_id])
             coeffs = wetted_drag(target['coeffs'], wet_ratio, damping_scale)
-            force_w, torque_w = water_drag(model, data, body_id, coeffs)
+            force_w, torque_w = water_drag(model, data, body_id, coeffs,
+                                           heave_world_only=(body_id == self.body_id))
             # 저항은 물에 잠긴 부분이 받으므로 잠긴 부분의 가운데(= 부력 중심)에 건다 (2026-11-20).
             #   무게중심에 걸면, 무게중심보다 아래(선체 바닥)를 미는 추진기가 선수를 드는 돌림힘을
             #   상쇄하는 힘이 없어 고속에서 선수가 계속 들렸다. 중력 0 등으로 부력 중심이 없으면 무게중심.
