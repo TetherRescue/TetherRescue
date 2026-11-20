@@ -5,7 +5,7 @@ view_wolmido와 같은 구조 흐름(동경 Launcher·LaunchMission)에 날씨�
   clear  맑음: 잔잔한 물, 밝은 하늘
   storm  비/폭풍: 큰 파도(진폭 합 0.2 m, 화면에도 파도 모양 수면), 굵은 비, 어두운 하늘
   fog    안개: 잔잔한 물, 가시거리 25 m
-물때(--tide)는 날씨와 따로 고른다. 기존 view_wolmido·config는 바꾸지 않는다.
+물때(--tide)는 날씨와 따로 고른다. 사람은 구명환을 잡기 전까지 발버둥 친다 (--calm-person 으로 끔). 기존 view_wolmido·config는 바꾸지 않는다.
 """
 
 import argparse
@@ -23,10 +23,11 @@ VICTIM = (-38.0, 4.0)   # view_wolmido 환경들과 같은 사람 위치 [m]
 TIDES = {"high": 0.0, "low": config.Wolmido.LOW_TIDE_DROP}
 
 
-def build_weather(name='clear', tide='high', *, launch=None, watchdog_settings=None):
+def build_weather(name='clear', tide='high', *, struggle=True, launch=None, watchdog_settings=None):
     """월미도 맵·날씨에 동경 구명환 발사 시나리오를 조립한다. (LaunchMission, WolmidoMap, WolmidoWeather)를 돌려준다.
 
-    조립 순서·부품은 view_wolmido.build_wolmido와 같고, 날씨 부품과 (파도가 있으면) 파도 수면 표시를 더한다.
+    조립 순서·부품은 view_wolmido.build_wolmido와 같고, 날씨 부품과 (파도가 있으면) 파도 수면 표시,
+    struggle=True면 사람 발버둥(sim.world.struggle)을 더한다.
     """
     from sim.robot.launcher import Launcher
     from sim.robot.robot import Robot
@@ -36,6 +37,7 @@ def build_weather(name='clear', tide='high', *, launch=None, watchdog_settings=N
     from sim.world.launch_mission import LaunchMission, LaunchSettings
     from sim.world.lifebuoy import Lifebuoy
     from sim.world.rescue_mission import RescueMissionSettings
+    from sim.world.struggle import Struggle
     from sim.world.tether import Tether
     from sim.world.wave_visual import WaveSurface
     from sim.world.world import build_world
@@ -60,6 +62,8 @@ def build_weather(name='clear', tide='high', *, launch=None, watchdog_settings=N
     parts = [water, robot, human, ring, rope, grasp, launcher, world_map, sky]
     if waves:
         parts.append(WaveSurface(waves, rgba=sky.setting['water_rgba']))
+    if struggle:
+        parts.append(Struggle(human, grasp))
     world = build_world(parts=parts)
     mujoco.mj_forward(world.model, world.data)
     mission = LaunchMission(world, robot, launcher, grasp, rope, tow_heading=tow_heading,
@@ -72,10 +76,12 @@ def run_viewer(mission, sky, title, speed=1.):
     import time
     import mujoco.viewer
     from sim.world.rope_visual import draw_rope
+    from sim.world.struggle import Struggle
     from sim.world.wave_visual import WaveSurface
 
     world = mission.world
     wave = next((part for part in world.parts if isinstance(part, WaveSurface)), None)
+    struggle = next((part for part in world.parts if isinstance(part, Struggle)), None)
     with mujoco.viewer.launch_passive(world.model, world.data) as viewer:
         viewer.opt.geomgroup[config.Groups.PHYSICS] = 1
         viewer.cam.distance, viewer.cam.azimuth, viewer.cam.elevation = 16., 150., -32.
@@ -93,6 +99,8 @@ def run_viewer(mission, sky, title, speed=1.):
                 viewer.cam.lookat[:] = (world.data.xpos[mission.robot.body_id] + world.data.xpos[mission.human_body]) / 2
                 viewer.user_scn.ngeom = 0   # 매 화면 줄·빗줄기를 새로 그린다
                 draw_rope(viewer.user_scn, world.model, world.data, mission.rope)
+                if struggle is not None:
+                    struggle.draw(viewer.user_scn, world.model, world.data)
                 sky.draw_rain(viewer.user_scn, viewer.cam.lookat, world.data.time)
                 if wave is not None:
                     wave.update(world.model, world.data.time)
@@ -116,12 +124,13 @@ def main():
     parser.add_argument('--weather', choices=tuple(WEATHERS), default='clear')
     parser.add_argument('--tide', choices=tuple(TIDES), default='high')
     parser.add_argument('--speed', type=float, default=2., help='화면 재생 배속 (기본 2배, headless 에는 영향 없음)')
+    parser.add_argument('--calm-person', action='store_true', help='사람 발버둥 끄기')
     parser.add_argument('--headless', action='store_true')
     parser.add_argument('--timeout', type=float, default=240, help='headless 제한 시뮬레이션 시간 [초]')
     args = parser.parse_args()
     if not math.isfinite(args.speed) or args.speed <= 0:
         parser.error('--speed 는 양수여야 합니다.')
-    mission, _, sky = build_weather(args.weather, args.tide)
+    mission, _, sky = build_weather(args.weather, args.tide, struggle=not args.calm_person)
     label = f'{args.weather}/{args.tide}'
     if args.headless:
         try:
