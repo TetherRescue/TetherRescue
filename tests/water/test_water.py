@@ -423,6 +423,38 @@ def test_roll_rate_resisted():
     assert torque_w[0] < 0
 
 
+def _sideways_body_moving_along_its_z():
+    """x 축 둘레로 90° 눕혀 몸체 z 축이 세상 옆(−y)을 향하게 하고, 그 방향(월드 −y)으로 1 m/s 움직인다.
+
+    착수한 구명환이 이런 자세였다 (몸체 z 축이 옆을 향하고 그 방향으로 미끄러짐, 2026-11-20).
+    """
+    model, data, bid = _boat()
+    half = math.radians(90) / 2
+    data.qpos[3:7] = (math.cos(half), math.sin(half), 0, 0)   # x 축 둘레 90° → 몸체 z = 월드 −y
+    data.qvel[0:3] = (0.0, -1.0, 0.0)
+    mujoco.mj_forward(model, data)
+    return model, data, bid
+
+
+def test_sideways_body_keeps_drag_along_its_z():
+    # 재발 방지: 몸체 z 축이 옆을 향한 몸체(사람·구명환)가 그 축 방향으로 움직이면 저항이 있어야 한다.
+    #   heave 보정(세상 위아래 속도만 쓰기)을 모든 몸체에 쓰면 이 저항이 0 이 되어,
+    #   착수한 환이 멈추지 않고 0.31 m/s 로 미끄러져 사람이 못 잡았다 (발사 미션 ATTACH 시간 초과).
+    model, data, bid = _sideways_body_moving_along_its_z()
+    force_w, _ = water.water_drag(model, data, bid, COEFFS)          # 기본값 = 보정 없음 (사람·구명환 경로)
+    along_z, _ = water.drag_b([0.0, 0.0, 1.0], [0, 0, 0], COEFFS)   # 몸체 z 축으로 1 m/s 일 때의 저항 크기
+    np.testing.assert_allclose(force_w, (0.0, -along_z[2], 0.0), atol=1e-9)   # 움직임(−y)의 반대 = +y
+    assert force_w[1] > 0
+
+
+def test_heave_world_only_assumes_upright_body():
+    # heave 보정은 "몸체 z = 위" 를 가정한다 → 옆으로 누운 몸체에 켜면 그 축 저항이 사라진다.
+    #   그래서 Water 는 배에만 켠다 (heave_world_only=(body_id == 배)). 이 테스트는 그 가정을 기록해 둔다.
+    model, data, bid = _sideways_body_moving_along_its_z()
+    force_w, _ = water.water_drag(model, data, bid, COEFFS, heave_world_only=True)
+    np.testing.assert_allclose(force_w, 0.0, atol=1e-9)
+
+
 # ─────────────────────────────────────────────────────────────
 # 6. 실제 시뮬레이션: 물 + 로봇을 조립해서 시간을 흘려 본다 (1주차 완료 기준)
 # ─────────────────────────────────────────────────────────────
@@ -512,6 +544,29 @@ def test_roll_release_settles():
     world, _, _ = _sim_world(roll_deg=15)
     _run(world, seconds=3.0)
     assert abs(_roll_deg(world)) < 0.5
+
+
+def test_build_world_connects_surface_to_robot():
+    # 파도-로봇 연동 (WaterAPI.SHARED_STATE: 함수 전달): 조립하면 로봇이 이 물의 wave_height 를 받는다
+    _, water_part, robot = _sim_world()
+    assert robot.surface_height == water_part.wave_height
+    # 물 객체의 파도를 바꾸면 로봇이 보는 수면도 같이 바뀜 (같은 물을 봄)
+    water_part.waves = ((0.5, 8.0, 0.0, 0.0),)
+    assert robot.surface_height(0.0, 0.0, 0.0) == pytest.approx(0.5)
+
+
+def test_build_world_keeps_explicit_surface():
+    # 직접 준 수면 함수는 덮어쓰지 않음
+    def own(x, y, t):
+        return np.zeros_like(np.asarray(x, dtype=float))
+    world = build_world(parts=(Water(waves=CALM), Robot(surface_height=own)))
+    assert world.parts[1].surface_height is own
+
+
+def test_no_water_no_connection():
+    # 물이 없으면 연결할 수면도 없음 → 1주차 가정 "항상 물속" 그대로
+    world = build_world(parts=(Robot(),), gravity=0)
+    assert world.parts[0].surface_height is None
 
 
 # ─────────────────────────────────────────────────────────────
@@ -736,3 +791,34 @@ def test_vanishing_angle_matches_exact(tilt_boat, exact_gz, axis):
     exact = _vanishing_angle(lambda a: exact_gz(a, axis))
     voxel = _vanishing_angle(lambda a: _voxel_gz(tilt_boat, a, axis))
     assert voxel == pytest.approx(exact, abs=VANISHING_ANGLE_TOL_DEG)
+
+
+# ─────────────────────────────────────────────────────────────
+# 고속 가짜 양력 회귀 시험 (2026-11-20, 동경 님 제기: 빨라지면 떠올라 저항이 0 이 됨)
+# ─────────────────────────────────────────────────────────────
+def test_forward_speed_does_not_lift_pitched_boat():
+    # 선수를 5° 든 배가 5 m/s 로 앞으로만 달릴 때, heave 저항이 배를 위로 밀면 안 된다.
+    #   예전: 앞 속도 일부가 배 기준 z 속도로 섞여 heave 저항(바닥 넓이 · Cd 1.5)이 위로 수백 N 을 냈다.
+    #   지금: heave 저항은 월드 위아래 속도로만 계산 → 위쪽 힘이 없어야 한다 (앞뒤 저항의 기울어진 성분만 아래로).
+    world, water_part, robot = _sim_world()
+    adr, dof = robot.qpos_adr, world.model.body_dofadr[robot.body_id]
+    half = math.radians(-5) / 2                       # y 축(왼쪽) 둘레 음수 회전 = 선수가 들림
+    world.data.qpos[adr + 3:adr + 7] = (math.cos(half), 0, math.sin(half), 0)
+    world.data.qvel[dof:dof + 6] = 0.0
+    world.data.qvel[dof] = 5.0                        # 월드 +x 로 5 m/s
+    mujoco.mj_forward(world.model, world.data)
+    force_w, _ = water.water_drag(world.model, world.data, robot.body_id, water_part.targets[0]['coeffs'],
+                                  heave_world_only=True)   # Water.add_forces 가 배에 쓰는 것과 같게
+    assert force_w[0] < 0                             # 앞으로 가면 뒤로 미는 저항은 그대로
+    assert force_w[2] <= 1e-9                         # 위로 띄우는 힘은 없음
+
+
+def test_drag_acts_at_center_of_buoyancy():
+    # 저항은 잠긴 부분 가운데(부력 중심)에 걸려야 한다. 무게중심에 걸면 추진기의 선수 들림 돌림힘을 못 막음.
+    world, water_part, robot = _sim_world()
+    world.acc.reset()
+    water_part.add_forces(world.model, world.data, world.acc)
+    loads = [load for load in world.acc._loads if load[0] == robot.body_id]
+    buoyancy, drag = loads[0], loads[1]
+    assert buoyancy[3] is not None
+    np.testing.assert_allclose(drag[3], buoyancy[3])
