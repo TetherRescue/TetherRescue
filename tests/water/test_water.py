@@ -655,7 +655,7 @@ def test_calm_water_no_drift(added_mass_on):
 # 8. 큰 각도 복원력: 복셀 부력이 "정답"을 잘 따라가는지 (재발 방지)
 # ─────────────────────────────────────────────────────────────
 # 왜 필요한가
-#   동경 님 전복 기준각(config.Capsize, 90°)은 이 복셀 부력으로 잰 복원팔 GZ 에서 나왔다.
+#   복원력 소실각(넘으면 스스로 못 돌아옴)은 이 복셀 부력으로 잰 복원팔 GZ 에서 나온다 (전복 판정은 2026-11-19 없앰).
 #   부력 코드나 VOXEL_RES 가 바뀌어 큰 각도 계산이 틀어지면, 전복 기준각 근거도 조용히 무너진다.
 #   → 정답과 비교하는 테스트를 두어, 틀어지면 바로 실패하게 한다.
 #
@@ -732,11 +732,7 @@ def test_large_angle_gz_matches_exact(tilt_boat, exact_gz, axis, deg):
 
 @pytest.mark.parametrize("axis", [0, 1], ids=["roll", "pitch"])
 def test_vanishing_angle_matches_exact(tilt_boat, exact_gz, axis):
-    # 복원력 소실각이 정답과 ±2° 안, 그리고 전복 기준각(config.Capsize)보다 뒤에 있어야
-    # "기준각 전까지는 스스로 일어선다" 는 근거가 성립한다.
+    # 복원력 소실각이 정답과 ±2° 안 (복셀 부력이 큰 각도에서도 맞는지)
     exact = _vanishing_angle(lambda a: exact_gz(a, axis))
     voxel = _vanishing_angle(lambda a: _voxel_gz(tilt_boat, a, axis))
     assert voxel == pytest.approx(exact, abs=VANISHING_ANGLE_TOL_DEG)
-    limit = (config.Capsize.ROLL_LIMIT, config.Capsize.PITCH_LIMIT)[axis]
-    if limit is not None:
-        assert math.radians(min(exact, voxel)) > limit

@@ -29,8 +29,12 @@ class RescueApproachSettings:
     # 바깥 경로(TRANSIT) 중간 경유점에서는 멈추지 않고 이 속도 [m/s] 로 지나간다. 마지막 경유점·대기 위치는
     # 기존 정밀 정지(navigation)를 그대로 쓴다. 이유 (2026-11-19 측정): 경유점마다 감속해 접근 평균 0.24~0.34 m/s.
     # [실험값 — 11/23 회의에서 확정]
-    transit_speed: float = 3.0   # A형 최고 속도 약 3.3 m/s (2026-11-19 측정)
+    transit_speed: float = 4.5   # A형 최고 속도 약 4.9 m/s (추진기 100 N, 2026-11-19 측정)
     transit_gain: float = 2.0    # 경유점까지 거리 × 이 값 = 원하는 속도 (멈추지 않게 크게)
+    # 사람 근처(route_radius + near_margin 안)에서는 near_speed 로 줄인다. 밖에서는 경계까지 거리에 비례해 감속.
+    # 이유 (2026-11-19): 3 m/s 로 곧장 들어오다 첫 경유점에서 다 못 꺾고 사람 쪽으로 파고들어 간격 0.25 m.
+    near_speed: float = 1.2
+    near_margin: float = 2.0
     docking_speed: float = .3  # 마지막 후진 속도 .2 → .3 (2026-11-17)
     gap_tolerance: float = .15
     relative_speed_tolerance: float = .06
@@ -175,6 +179,10 @@ class RescueApproach:
         if self._route_index + 1 >= len(self._angles):
             return False
         offset = self.world.data.xipos[self.robot.body_id, :2] - self.world.data.site_xpos[self.ring_site, :2]
+        # 아직 멀리서 들어오는 중이면 각도가 같아도 지난 게 아니다 (출발점이 첫 경유점과 같은 방향일 때
+        # 출발하자마자 지났다고 판정해, 먼 거리를 정밀 정지 속도로 달렸음 — 2026-11-19 확인)
+        if np.linalg.norm(offset) > self.settings.route_radius + 1.0:
+            return False
         angle = math.atan2(offset[1], offset[0])
         waypoint = self._angles[self._route_index]
         turn = self._angles[-1] - self._angles[0]
@@ -186,8 +194,20 @@ class RescueApproach:
         if self.stage != RescueStage.TRANSIT:
             return
         last = self._route_index + 1 >= len(self._angles)
-        self.controller.settings = (self.navigation if last else replace(
-            self.navigation, max_speed=self.settings.transit_speed, distance_gain=self.settings.transit_gain))
+        if last:
+            self.controller.settings = self.navigation
+            return
+        # 사람에게서 멀면 빠르게, 가까워지면 near_speed 로 (경계까지 거리 × transit_gain 만큼 여유)
+        data = self.world.data
+        radius = float(np.linalg.norm(data.xipos[self.robot.body_id, :2] - data.site_xpos[self.ring_site, :2]))
+        outside = radius - (self.settings.route_radius + self.settings.near_margin)
+        speed = min(self.settings.transit_speed,
+                    self.settings.near_speed + self.settings.transit_gain * max(0., outside))
+        # 추진기 전진 한계(2대 합)까지 쓰고 속도 이득을 키운다. 정밀 정지 설정(60 N, 60 N/(m/s))으로는 최고 약 2.2 m/s
+        self.controller.settings = replace(
+            self.navigation, max_speed=speed, distance_gain=self.settings.transit_gain,
+            max_force=max(self.navigation.max_force, 2 * config.Thruster.MAX_FORWARD),
+            speed_gain=max(self.navigation.speed_gain, 300.))
 
     def _route_target(self):
         angle = self._angles[self._route_index]
