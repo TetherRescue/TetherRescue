@@ -97,6 +97,7 @@ class RescueMission:
         if MissionWatchdog.invalid_state(self.world.data):
             raise ValueError('먼저 mj_resetData로 정상 출발 상태를 복원하세요.')
         self.rope.reset(self.world.model)
+        self.robot.reset_inversion(self.world.model)
         self.approach.reset()
         self.stage = MissionStage.APPROACH
         self.attachment_time = None
@@ -151,7 +152,7 @@ class RescueMission:
         self.world.acc.reset()
         self.world.acc.apply(self.world.model, self.world.data)
         # 수치 오류가 난 실제 data를 렌더러에 전달하지 않는다.
-        if self.failure.code in (FailureCode.CAPSIZE, FailureCode.STAGE_TIMEOUT,
+        if self.failure.code in (FailureCode.STAGE_TIMEOUT,
                                  FailureCode.MISSION_TIMEOUT, FailureCode.INFERENCE_TIMEOUT):
             data = self.world.data
             pose = (data.qpos, data.act, data.time)

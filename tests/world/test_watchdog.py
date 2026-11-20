@@ -42,9 +42,9 @@ def test_changing_stages_does_not_restart_overall_deadline():
     assert failure.code == FailureCode.MISSION_TIMEOUT
 
 
+# 전복 판정은 없앴다 (2026-11-19): 크게 기울거나 뒤집혀도 자세만으로는 멈추지 않는다
 @pytest.mark.parametrize('roll,pitch,yaw,expected', [
-    (61, 0, 0, FailureCode.CAPSIZE), (0, 61, 0, FailureCode.CAPSIZE),
-    (180, 0, 0, FailureCode.CAPSIZE), (0, 0, 180, None), (20, 20, 90, None),
+    (61, 0, 0, None), (0, 61, 0, None), (180, 0, 0, None), (0, 0, 180, None), (20, 20, 90, None),
 ])
 def test_orientation_is_checked_from_qpos_before_forward(roll, pitch, yaw, expected):
     mission = build_rescue_mission()
@@ -59,7 +59,6 @@ def test_orientation_is_checked_from_qpos_before_forward(roll, pitch, yaw, expec
 
 
 @pytest.mark.parametrize('kind,code', [('timeout', FailureCode.STAGE_TIMEOUT),
-                                      ('capsize', FailureCode.CAPSIZE),
                                       ('nonfinite', FailureCode.INVALID_STATE),
                                       ('warning', FailureCode.ENGINE_WARNING),
                                       ('inference', FailureCode.INFERENCE_TIMEOUT)])
@@ -173,13 +172,13 @@ def test_completed_mission_keeps_monitoring_physics_without_success_timeout():
     watchdog = MissionWatchdog(WatchdogSettings(mission_timeout=1.))
     mission.world.data.time = 10.
     assert watchdog.check(mission.world.model, mission.world.data, mission.robot.body_id, 'COMPLETE') is None
-    apply_failure_demo(mission, 'capsize')
+    apply_failure_demo(mission, 'nonfinite')
     failure = watchdog.check(mission.world.model, mission.world.data, mission.robot.body_id, 'COMPLETE')
-    assert failure.code == FailureCode.CAPSIZE
+    assert failure.code == FailureCode.INVALID_STATE
 
 
 @pytest.mark.parametrize('options', [dict(approach_timeout=0), dict(attach_timeout=-1),
-                                     dict(tow_timeout=float('nan')), dict(roll_limit=2.)])
+                                     dict(tow_timeout=float('nan')), dict(mission_timeout=0)])
 def test_invalid_watchdog_settings_are_rejected(options):
     with pytest.raises(ValueError):
         WatchdogSettings(**options)
@@ -266,7 +265,7 @@ def test_nonfinite_time_is_reported_with_last_finite_failure_timestamp():
     assert np.isnan(mission.world.data.time)
 
 
-@pytest.mark.parametrize('kind,code', [('timeout', 'STAGE_TIMEOUT'), ('capsize', 'CAPSIZE'),
+@pytest.mark.parametrize('kind,code', [('timeout', 'STAGE_TIMEOUT'),
                                       ('nonfinite', 'INVALID_STATE'), ('warning', 'ENGINE_WARNING'),
                                       ('inference', 'INFERENCE_TIMEOUT')])
 def test_headless_cli_reports_failure_and_exits_nonzero(kind, code):
