@@ -875,3 +875,50 @@ def test_planing_lift_can_be_turned_off(monkeypatch):
     monkeypatch.setattr(config.WaterParams, "PLANING_ENABLED", False)
     force_w, point_w = _lift(3.0, 5.0)
     assert force_w is None and point_w is None
+
+
+# ─────────────────────────────────────────────────────────────
+# 젖은 바닥 마찰 (2026-11-21, 동경 님 요청 2: 떠올라도 저항이 사라지지 않게)
+# ─────────────────────────────────────────────────────────────
+def _friction(lift=0.0, vel_b=(3.0, 0.0, 0.0)):
+    world, water_part, robot = _sim_world(lift=lift)
+    voxels = water_part.targets[0]['voxels']
+    forces_w, _, volume = water.voxel_buoyancy(world.data, robot.body_id, waves=CALM, voxels=voxels,
+                                               gravity=config.Physics.GRAVITY)
+    force_w, point_w = water.bottom_friction(world.data, robot.body_id, voxels, forces_w,
+                                             config.Physics.GRAVITY, np.array(vel_b, dtype=float))
+    return force_w, point_w, water.wet_bottom(voxels, forces_w, config.Physics.GRAVITY), volume
+
+
+def test_friction_coefficient_matches_ittc_line():
+    # Re = 1e7 → Cf = 0.075 / (7 − 2)² = 0.003
+    length = 1.0
+    speed = 1.0e7 * WaterParams.WATER_KINEMATIC_VISCOSITY / length
+    assert water.friction_coefficient(speed, length) == pytest.approx(0.003, rel=1e-9)
+    # 아주 느려도 식이 터지지 않음 (FRICTION_RE_MIN 으로 계산)
+    assert np.isfinite(water.friction_coefficient(1e-6, length))
+
+
+def test_bottom_friction_opposes_sliding_with_hand_value():
+    force_w, point_w, wet, _ = _friction(vel_b=(3.0, 0.0, 0.0))
+    cf = water.friction_coefficient(3.0, wet['length'])
+    expected = 0.5 * config.Physics.RHO_WATER * 3.0 ** 2 * wet['area'] * cf
+    assert force_w[0] == pytest.approx(-expected, rel=1e-9)   # 앞으로 가면 뒤로
+    assert abs(force_w[1]) < 1e-9 and abs(force_w[2]) < 1e-9
+    assert point_w is not None
+
+
+def test_bottom_friction_stays_when_boat_lifts():
+    # 핵심 회귀 시험: 배를 1.2 cm 들어 올려 잠긴 부피가 줄어도, 바닥이 닿아 있는 한 마찰은 그대로.
+    #   (DRAG_CD 2차 저항은 잠긴 비율만큼 줄어 떠오르면 0 으로 간다 → 그것만으로는 저항이 사라졌음)
+    rest, _, _, vol_rest = _friction()
+    lifted, _, _, vol_lifted = _friction(lift=0.012)
+    assert vol_lifted < 0.6 * vol_rest
+    assert lifted[0] == pytest.approx(rest[0], rel=1e-9)
+
+
+def test_bottom_friction_zero_at_rest_or_out_of_water_or_off(monkeypatch):
+    assert _friction(vel_b=(0.0, 0.0, 0.0))[0] is None             # 멈춰 있으면 없음
+    assert _friction(lift=0.5)[0] is None                            # 물 밖이면 없음
+    monkeypatch.setattr(config.WaterParams, "FRICTION_ENABLED", False)
+    assert _friction()[0] is None
