@@ -840,13 +840,15 @@ def _pitched_boat_buoyancy(trim_deg):
     return world, robot, voxels, forces_w
 
 
-def _lift(trim_deg, speed):
+def _lift(trim_deg, speed, vz=0.0):
+    # 세상 기준으로 앞(+x)으로 speed, 위로 vz 움직이는 배. planing_lift 는 몸체 좌표 속도를 받으므로 돌려서 넘김
+    from sim import frames
     world, robot, voxels, forces_w = _pitched_boat_buoyancy(trim_deg)
-    return water.planing_lift(world.data, robot.body_id, voxels, forces_w, config.Physics.GRAVITY,
-                              np.array([speed, 0.0, 0.0]))
+    vel_b = frames.world_to_body(world.data, robot.body_id, np.array([speed, 0.0, vz]))
+    return water.planing_lift(world.data, robot.body_id, voxels, forces_w, config.Physics.GRAVITY, vel_b)
 
 
-@pytest.mark.parametrize("trim_deg, speed", [(3.0, 0.0), (3.0, -2.0), (0.0, 5.0), (-3.0, 5.0)])
+@pytest.mark.parametrize("trim_deg, speed", [(3.0, 0.0), (3.0, -2.0), (0.0, 5.0), (-3.0, 5.0)])  # vz = 0
 def test_planing_lift_needs_forward_speed_and_bow_up(trim_deg, speed):
     # 멈춰 있거나, 뒤로 가거나, 뱃머리가 들리지 않으면 활주 양력은 없다 → 정지 흘수·평형 테스트에 영향 없음
     force_w, point_w = _lift(trim_deg, speed)
@@ -922,3 +924,17 @@ def test_bottom_friction_zero_at_rest_or_out_of_water_or_off(monkeypatch):
     assert _friction(lift=0.5)[0] is None                            # 물 밖이면 없음
     monkeypatch.setattr(config.WaterParams, "FRICTION_ENABLED", False)
     assert _friction()[0] is None
+
+
+def test_planing_lift_damps_heave():
+    # 300 N 출렁임 보완 (2026-11-21): 받음각 α = τ − atan(vz / V)
+    #   내려앉는 중(vz < 0)이면 더 세게, 떠오르는 중(vz > 0)이면 약하게 받친다 → 위아래 움직임을 멈추게 함
+    steady, _ = _lift(2.0, 8.0)
+    falling, _ = _lift(2.0, 8.0, vz=-0.2)
+    rising, _ = _lift(2.0, 8.0, vz=+0.2)
+    assert rising[2] < steady[2] < falling[2]
+    # 배 앞축을 따라 미끄러지면(받음각 0) 양력 없음
+    along_keel, _ = _lift(2.0, 8.0, vz=8.0 * math.tan(math.radians(2.0)))
+    assert along_keel is None or np.linalg.norm(along_keel) < 1e-9   # 반올림 오차로 아주 작은 값이 남을 수 있음
+    # 뱃머리가 숙여져 있어도 빠르게 내려앉으면 바닥이 물을 쳐서 받친다
+    assert _lift(-1.0, 8.0, vz=-0.5)[0] is not None

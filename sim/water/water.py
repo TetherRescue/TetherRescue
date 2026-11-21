@@ -366,23 +366,36 @@ def planing_lift(data, body_id, voxels, forces_w, gravity, vel_b):
     vel_b    : 물에 대한 무게중심 속도 (몸체 좌표) [m/s]
 
     순서 (식과 출처는 config.WaterParams.PLANING_* 주석)
-      1) 앞으로 가는 속도 V, 뱃머리 들린 각도 τ. 뒤로 가거나 뱃머리가 숙여져 있으면 양력 없음
+      1) 뱃머리 방향 수평 속도 V, 뱃머리 들린 각도 τ, 받음각 α = τ − atan(vz / V).
+         뒤로 가거나 α ≤ 0 이면 양력 없음
       2) 바닥 칸 중 젖은 칸으로 젖은 바닥의 길이·넓이 → 평균 폭 b, 길이비 λ
-      3) L = ½ρV² · b² · C · λ^0.5 · τ^1.1  (τ 는 도 단위, Savitsky 의 속도 항만)
+      3) L = ½ρV² · b² · C · λ^0.5 · α^1.1  (α 는 도 단위, Savitsky 의 속도 항만. 위아래로 안 움직이면 α = τ)
       4) 힘은 바닥에 수직(몸체 +z). 수직 성분이 L 이 되도록 L / cos τ 로 건다
          → 남는 수평 성분이 뒤를 향해 유도 저항이 된다 (L · tan τ)
       5) 작용점 = 젖은 바닥 뒤끝에서 앞으로 lp (Savitsky 압력 중심 식), 높이는 바닥면
     """
     if not config.WaterParams.PLANING_ENABLED or gravity <= 0:
         return None, None
-    speed = float(vel_b[0])
-    if speed <= 0:
-        return None, None
     # 1) 트림 τ = 몸체 앞축(x_b)이 수평에서 위로 들린 각도
     fwd_w = frames.body_to_world(data, body_id, (1.0, 0.0, 0.0))
-    trim = math.atan2(fwd_w[2], math.hypot(fwd_w[0], fwd_w[1]))
-    if trim <= 0:
+    horiz = math.hypot(fwd_w[0], fwd_w[1])
+    if horiz <= 0:
         return None, None
+    trim = math.atan2(fwd_w[2], horiz)
+    # V = 뱃머리 방향으로 가는 수평 속도
+    vel_w = frames.body_to_world(data, body_id, vel_b)
+    speed = float((vel_w[0] * fwd_w[0] + vel_w[1] * fwd_w[1]) / horiz)
+    if speed <= 0:
+        return None, None
+    # 1-1) 받음각 α = τ − atan(위아래 속도 ÷ V)   (2026-11-21, 300 N 출렁임 보완)
+    #   바닥이 물을 치는 실제 각도. 배가 내려앉는 중이면(vz < 0) 더 세게 치고, 떠오르는 중이면 약하게 친다.
+    #   → 활주 양력이 위아래 움직임을 스스로 멈추게 하는 감쇠 역할을 한다 (실제 활주선의 위아래 감쇠).
+    #   이게 없으면 떠오른 배는 잠긴 부피가 줄어 heave 감쇠(damping_scale)도 사라져서, 300 N 에서
+    #   떴다 가라앉았다를 반복했다.
+    alpha = trim - math.atan2(vel_w[2], speed)
+    if alpha <= 0:
+        return None, None
+    alpha_deg = min(math.degrees(alpha), config.WaterParams.PLANING_MAX_TRIM_DEG)
     trim_deg = min(math.degrees(trim), config.WaterParams.PLANING_MAX_TRIM_DEG)
 
     # 2) 젖은 바닥의 길이·넓이 → 평균 폭 b, 길이비 λ
@@ -394,9 +407,9 @@ def planing_lift(data, body_id, voxels, forces_w, gravity, vel_b):
 
     # 3) 양력 크기 (수직 성분)
     lift = (0.5 * config.Physics.RHO_WATER * speed ** 2 * beam ** 2
-            * config.WaterParams.PLANING_LIFT_COEF * lam ** 0.5 * trim_deg ** 1.1)
+            * config.WaterParams.PLANING_LIFT_COEF * lam ** 0.5 * alpha_deg ** 1.1)
 
-    # 4) 바닥에 수직인 힘 → 월드
+    # 4) 바닥에 수직인 힘 → 월드. 방향은 실제 바닥 기울기(τ)를 따른다. 뱃머리가 숙여져 있으면(τ < 0) 그대로 cos τ
     force_w = frames.body_to_world(data, body_id, (0.0, 0.0, lift / math.cos(math.radians(trim_deg))))
 
     # 5) 압력 중심: lp / (λ b) = 0.75 − 1 / (5.21 · Cv² / λ² + 2.39),  Cv = V / √(g b)
