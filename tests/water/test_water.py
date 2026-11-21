@@ -822,3 +822,56 @@ def test_drag_acts_at_center_of_buoyancy():
     buoyancy, drag = loads[0], loads[1]
     assert buoyancy[3] is not None
     np.testing.assert_allclose(drag[3], buoyancy[3])
+
+
+# ─────────────────────────────────────────────────────────────
+# 고속 활주 양력 (2026-11-21, 동경 님 요청 1)
+# ─────────────────────────────────────────────────────────────
+def _pitched_boat_buoyancy(trim_deg):
+    """잔잔한 물의 배를 뱃머리 trim_deg 만큼 들고, 그 자세의 칸별 부력을 돌려준다."""
+    world, water_part, robot = _sim_world()
+    adr = robot.qpos_adr
+    half = math.radians(-trim_deg) / 2               # y 축(왼쪽) 둘레 음수 회전 = 뱃머리가 들림
+    world.data.qpos[adr + 3:adr + 7] = (math.cos(half), 0, math.sin(half), 0)
+    mujoco.mj_forward(world.model, world.data)
+    voxels = water_part.targets[0]['voxels']
+    forces_w, _, _ = water.voxel_buoyancy(world.data, robot.body_id, waves=CALM, voxels=voxels,
+                                          gravity=config.Physics.GRAVITY)
+    return world, robot, voxels, forces_w
+
+
+def _lift(trim_deg, speed):
+    world, robot, voxels, forces_w = _pitched_boat_buoyancy(trim_deg)
+    return water.planing_lift(world.data, robot.body_id, voxels, forces_w, config.Physics.GRAVITY,
+                              np.array([speed, 0.0, 0.0]))
+
+
+@pytest.mark.parametrize("trim_deg, speed", [(3.0, 0.0), (3.0, -2.0), (0.0, 5.0), (-3.0, 5.0)])
+def test_planing_lift_needs_forward_speed_and_bow_up(trim_deg, speed):
+    # 멈춰 있거나, 뒤로 가거나, 뱃머리가 들리지 않으면 활주 양력은 없다 → 정지 흘수·평형 테스트에 영향 없음
+    force_w, point_w = _lift(trim_deg, speed)
+    assert force_w is None and point_w is None
+
+
+def test_planing_lift_grows_with_speed_squared():
+    # 같은 자세에서 속도 2배 → 양력 4배 (L ∝ V²)
+    slow, _ = _lift(3.0, 3.0)
+    fast, _ = _lift(3.0, 6.0)
+    assert slow[2] > 0
+    assert fast[2] == pytest.approx(4.0 * slow[2], rel=1e-9)
+
+
+def test_planing_lift_is_normal_to_bottom_and_gives_induced_drag():
+    # 힘은 바닥에 수직 → 뱃머리를 들면 수평 성분이 뒤(−x)를 향한다 = 유도 저항 L · tan τ
+    trim = 4.0
+    force_w, point_w = _lift(trim, 5.0)
+    assert force_w[0] < 0
+    assert -force_w[0] == pytest.approx(force_w[2] * math.tan(math.radians(trim)), rel=1e-9)
+    # 작용점은 배 바닥 높이 근처 (바닥면에 건다)
+    assert point_w is not None and np.isfinite(point_w).all()
+
+
+def test_planing_lift_can_be_turned_off(monkeypatch):
+    monkeypatch.setattr(config.WaterParams, "PLANING_ENABLED", False)
+    force_w, point_w = _lift(3.0, 5.0)
+    assert force_w is None and point_w is None

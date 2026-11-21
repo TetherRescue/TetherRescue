@@ -355,6 +355,66 @@ def water_drag(model, data, body_id, coeffs, heave_world_only=False):
 
 
 # ─────────────────────────────────────────────────────────────
+# 고속 활주 양력: 빨리 달리는 배가 물을 아래로 밀어내며 떠오르는 힘 (2026-11-21, 동경 님 요청 1)
+# ─────────────────────────────────────────────────────────────
+def planing_lift(data, body_id, voxels, forces_w, gravity, vel_b):
+    """활주 양력 (월드 좌표 힘, 작용점). 힘이 없으면 (None, None).
+
+    voxels   : 이 몸체의 (칸 중심(몸체 좌표), 칸 크기, 칸 부피). Water.targets 의 값
+    forces_w : voxel_buoyancy 가 돌려준 칸별 부력 → 칸마다 얼마나 잠겼는지 거꾸로 구하는 데 씀
+    gravity  : 중력 크기 [m/s²]
+    vel_b    : 물에 대한 무게중심 속도 (몸체 좌표) [m/s]
+
+    순서 (식과 출처는 config.WaterParams.PLANING_* 주석)
+      1) 앞으로 가는 속도 V, 뱃머리 들린 각도 τ. 뒤로 가거나 뱃머리가 숙여져 있으면 양력 없음
+      2) 바닥 칸 중 젖은 칸으로 젖은 바닥의 길이·넓이 → 평균 폭 b, 길이비 λ
+      3) L = ½ρV² · b² · C · λ^0.5 · τ^1.1  (τ 는 도 단위, Savitsky 의 속도 항만)
+      4) 힘은 바닥에 수직(몸체 +z). 수직 성분이 L 이 되도록 L / cos τ 로 건다
+         → 남는 수평 성분이 뒤를 향해 유도 저항이 된다 (L · tan τ)
+      5) 작용점 = 젖은 바닥 뒤끝에서 앞으로 lp (Savitsky 압력 중심 식), 높이는 바닥면
+    """
+    if not config.WaterParams.PLANING_ENABLED or gravity <= 0:
+        return None, None
+    speed = float(vel_b[0])
+    if speed <= 0:
+        return None, None
+    # 1) 트림 τ = 몸체 앞축(x_b)이 수평에서 위로 들린 각도
+    fwd_w = frames.body_to_world(data, body_id, (1.0, 0.0, 0.0))
+    trim = math.atan2(fwd_w[2], math.hypot(fwd_w[0], fwd_w[1]))
+    if trim <= 0:
+        return None, None
+    trim_deg = min(math.degrees(trim), config.WaterParams.PLANING_MAX_TRIM_DEG)
+
+    # 2) 바닥 칸(가장 아래 층)이 얼마나 젖었나. 칸별 부력 ÷ (ρ g 칸부피) = 잠긴 비율
+    centers_b, cell_size, cell_volume = voxels
+    z_low = centers_b[:, 2].min()
+    bottom = np.isclose(centers_b[:, 2], z_low)
+    wet_depth = forces_w[bottom, 2] / (config.Physics.RHO_WATER * gravity * cell_volume) * cell_size[2]
+    weight = np.clip(wet_depth / config.WaterParams.PLANING_WET_DEPTH, 0.0, 1.0)
+    if weight.sum() <= 0:
+        return None, None
+    xs = centers_b[bottom, 0][weight > 0]
+    wet_length = float(xs.max() - xs.min() + cell_size[0])
+    wet_area = float(weight.sum() * cell_size[0] * cell_size[1])
+    beam = wet_area / wet_length
+    lam = wet_length / beam
+
+    # 3) 양력 크기 (수직 성분)
+    lift = (0.5 * config.Physics.RHO_WATER * speed ** 2 * beam ** 2
+            * config.WaterParams.PLANING_LIFT_COEF * lam ** 0.5 * trim_deg ** 1.1)
+
+    # 4) 바닥에 수직인 힘 → 월드
+    force_w = frames.body_to_world(data, body_id, (0.0, 0.0, lift / math.cos(math.radians(trim_deg))))
+
+    # 5) 압력 중심: lp / (λ b) = 0.75 − 1 / (5.21 · Cv² / λ² + 2.39),  Cv = V / √(g b)
+    cv = speed / math.sqrt(gravity * beam)
+    lp = lam * beam * (0.75 - 1.0 / (5.21 * cv ** 2 / lam ** 2 + 2.39))
+    y_mid = float(np.average(centers_b[bottom, 1], weights=weight))
+    point_b = (float(xs.min() - cell_size[0] / 2 + lp), y_mid, float(z_low - cell_size[2] / 2))
+    return force_w, frames.point_body_to_world(data, body_id, point_b)
+
+
+# ─────────────────────────────────────────────────────────────
 # 부가질량: 배가 속도를 바꾸면 주변 물도 같이 밀려서 배가 더 무겁게 움직인다
 # ─────────────────────────────────────────────────────────────
 # 기본값은 꺼져 있다 (config.WaterParams.ADDED_MASS_ENABLED 주석 참고).
@@ -522,6 +582,14 @@ class Water:
             #   무게중심에 걸면, 무게중심보다 아래(선체 바닥)를 미는 추진기가 선수를 드는 돌림힘을
             #   상쇄하는 힘이 없어 고속에서 선수가 계속 들렸다. 중력 0 등으로 부력 중심이 없으면 무게중심.
             acc.add(body_id, force_w, torque_w=torque_w, point_w=center_w)
+
+            # 활주 양력은 배에만 (Savitsky 식은 배 바닥 같은 판 모양 기준. 사람·구명환에는 맞지 않음)
+            if body_id == self.body_id:
+                vel_w, _ = frames.body_velocity_w(model, data, body_id)
+                vel_b = frames.world_to_body(data, body_id, vel_w - current)
+                lift_w, lift_point_w = planing_lift(data, body_id, target['voxels'], forces_w, gravity, vel_b)
+                if lift_w is not None:
+                    acc.add(body_id, lift_w, point_w=lift_point_w)
 
             # 부가질량도 감쇠처럼 물 밖으로 나오면 줄어든다 (같이 밀 물이 없으므로)
             if body_id == self.body_id and accel_w is not None:
