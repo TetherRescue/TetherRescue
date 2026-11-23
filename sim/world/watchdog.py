@@ -1,4 +1,4 @@
-"""시뮬레이션 시간·전복·비정상 물리 상태를 감시하는 latched Watchdog.
+"""시뮬레이션 시간·비정상 물리 상태를 감시하는 latched Watchdog. 전복 판정은 없앴다 (2026-11-19).
 
 추론 응답이 제한된 실제 시간 안에 오지 않으면 InferenceWatchdog가 안전 모드로 고정한다.
 안전 모드는 추진 명령을 0으로 두며, 로프를 끊거나 고장을 복구하지 않는다.
@@ -15,7 +15,6 @@ import numpy as np
 class FailureCode(str, Enum):
     STAGE_TIMEOUT = 'STAGE_TIMEOUT'
     MISSION_TIMEOUT = 'MISSION_TIMEOUT'
-    CAPSIZE = 'CAPSIZE'
     INVALID_STATE = 'INVALID_STATE'
     ENGINE_WARNING = 'ENGINE_WARNING'
     CONTROL_ERROR = 'CONTROL_ERROR'
@@ -24,22 +23,18 @@ class FailureCode(str, Enum):
 
 @dataclass(frozen=True)
 class WatchdogSettings:
-    """잔잔한 물 시험용 기준. 미확정 config.Capsize 계약값을 변경하지 않는다."""
+    """잔잔한 물 시험용 기준. 전복 판정은 2026-11-19 동경 결정으로 없앴다 (기울기로 임무를 멈추지 않음)."""
 
     approach_timeout: float = 150.0
     attach_timeout: float = 5.0
     tow_timeout: float = 100.0
     mission_timeout: float = 240.0
-    roll_limit: float = math.radians(60)
-    pitch_limit: float = math.radians(60)
 
     def __post_init__(self):
         for field in fields(self):
             value = getattr(self, field.name)
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f'{field.name}은 유한한 양수여야 합니다.')
-        if max(self.roll_limit, self.pitch_limit) > math.pi / 2:
-            raise ValueError('전복 기준은 90도 이하여야 합니다.')
 
 
 @dataclass(frozen=True)
@@ -96,21 +91,12 @@ class MissionWatchdog:
             return self.trip(FailureCode.ENGINE_WARNING, now, stage, f'MuJoCo {warning}')
         joint = int(model.body_jntadr[body_id])
         if joint < 0 or int(model.jnt_type[joint]) != int(mujoco.mjtJoint.mjJNT_FREE):
-            raise ValueError('전복 검사는 자유 관절이 있는 선체가 필요합니다.')
+            raise ValueError('자세 검사는 자유 관절이 있는 선체가 필요합니다.')
         address = model.jnt_qposadr[joint]
         quat = data.qpos[address + 3:address + 7]
         norm = float(np.linalg.norm(quat))
         if not math.isfinite(norm) or norm < 1e-12:
             return self.trip(FailureCode.INVALID_STATE, now, stage, 'Invalid boat quaternion')
-        # xmat이 아직 갱신되지 않았어도 qpos에서 직접 자세를 판정한다.
-        matrix = np.empty(9)
-        mujoco.mju_quat2Mat(matrix, quat / norm)
-        rotation = matrix.reshape(3, 3)
-        roll = math.atan2(rotation[2, 1], rotation[2, 2])
-        pitch = math.atan2(-rotation[2, 0], math.hypot(rotation[0, 0], rotation[1, 0]))
-        if abs(roll) >= self.settings.roll_limit or abs(pitch) >= self.settings.pitch_limit:
-            return self.trip(FailureCode.CAPSIZE, now, stage,
-                             f'Boat roll={math.degrees(roll):.1f} deg, pitch={math.degrees(pitch):.1f} deg')
         if stage != self._stage:
             self._stage = stage
             self._stage_start = now

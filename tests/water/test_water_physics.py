@@ -38,9 +38,10 @@ def test_archimedes_force_matches_analytic_box(height, volume):
     loads = applied_loads(world, water)
     np.testing.assert_allclose(loads[boat.body_id, :3],
                                [0, 0, volume * config.Physics.RHO_WATER * config.Physics.GRAVITY], atol=1e-9)
-    # 부력 중심(똑바로 뜨면 x = 수면 넓이 중심)과 COM 의 x 간격만큼 pitch 토크가 생긴다 (A형은 약 4 mm).
+    # 부력 중심(똑바로 뜨면 x = 수면 넓이 중심)과 배 몸체 COM 의 x 간격만큼 pitch 토크가 생긴다.
+    # 외력은 배 몸체에 걸리므로 몸체 COM(model.body_ipos, 카메라 팔 무게 제외) 기준 (2026-11-19)
     buoyancy_center = np.array([config.Hull.WATERPLANE_CENTER_X, 0., 0.])
-    expected_torque = np.cross(buoyancy_center - np.asarray(config.Hull.COM),
+    expected_torque = np.cross(buoyancy_center - world.model.body_ipos[boat.body_id],
                                [0., 0., volume * config.Physics.RHO_WATER * config.Physics.GRAVITY])
     # 뱃머리 비스듬한 면은 복셀 계단 근사라 부력 중심이 1 mm 안쪽으로 어긋날 수 있음 → 그만큼 허용
     lever_tol = 1e-3 * volume * config.Physics.RHO_WATER * config.Physics.GRAVITY
@@ -49,7 +50,7 @@ def test_archimedes_force_matches_analytic_box(height, volume):
 
 def test_dry_body_has_no_water_drag_or_torque():
     world, water, _ = boat_at(2.)
-    world.data.qvel[:] = [1, 2, 3, .1, .2, .3]
+    world.data.qvel[:6] = [1, 2, 3, .1, .2, .3]
     np.testing.assert_array_equal(applied_loads(world, water), 0)
 
 
@@ -116,7 +117,7 @@ def test_current_relative_drag_and_yaw_frame(monkeypatch):
 
 def test_drag_removes_energy_for_translation_and_rotation():
     world, water, boat = boat_at(-1.)
-    world.data.qvel[:] = [1, -.3, 0, .2, -.1, .3]
+    world.data.qvel[:6] = [1, -.3, 0, .2, -.1, .3]
     load = applied_loads(world, water)[boat.body_id]
     velocity, omega = body_velocity_w(world.model, world.data, boat.body_id)
     # 중력·부력과 무관한 수평 이동·회전의 수력 일률.

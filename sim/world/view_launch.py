@@ -37,9 +37,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--headless', action='store_true')
     parser.add_argument('--speed', type=float, default=1., help='화면 재생 배속 (headless 에는 영향 없음)')
-    parser.add_argument('--start', type=float, nargs=2, default=(8, 3), metavar=('X', 'Y'))
+    # 기본 = 사람에게서 50 m 떨어져 사람을 보고 출발 (2026-11-19 동경: 최소 50 m 에서 다가가는 장면)
+    parser.add_argument('--start', type=float, nargs=2, default=(50, 0), metavar=('X', 'Y'))
     parser.add_argument('--victim', type=float, nargs=2, default=(0, 0), metavar=('X', 'Y'))
-    parser.add_argument('--yaw', type=float, default=0, help='배의 출발 방향 [도]')
+    parser.add_argument('--yaw', type=float, default=180, help='배의 출발 방향 [도]')
     parser.add_argument('--heading', type=float, default=0, help='견인 방향 [도]')
     parser.add_argument('--timeout', type=float, default=200, help='headless 제한 시뮬레이션 시간 [초]')
     args = parser.parse_args()
@@ -75,18 +76,20 @@ def main():
                         budget -= world.model.opt.timestep
                 decorate_goal(mission, viewer.user_scn)
                 draw_rope(viewer.user_scn, world.model, world.data, mission.rope)
-                viewer.cam.lookat[:] = (world.data.xpos[mission.robot.body_id]
-                                       + world.data.xpos[mission.human_body]) / 2
+                boat, person = world.data.xpos[mission.robot.body_id], world.data.xpos[mission.human_body]
+                viewer.cam.lookat[:] = (boat + person) / 2
+                viewer.cam.distance = max(9., .9 * float(np.linalg.norm(boat[:2] - person[:2])) + 5.)   # 둘 다 보이게
             state = mission.readings()
             landing = state['landing']
             status = (f"{mission.failure.code.value}" if mission.failed else
                       'COMPLETE' if mission.arrived else state['phase'])
             viewer.set_texts([(mujoco.mjtFontScale.mjFONTSCALE_150, mujoco.mjtGridPos.mjGRID_TOPLEFT,
                                f'LIFEBUOY LAUNCH (x{args.speed:g})\nPhase\nTime\nLauncher\nGrip-hand gap\n'
-                               'Landing miss\nHeld\nTension\nPerson progress',
+                               'Landing miss\nHeld\nTension\nPerson progress\nUpside down',
                                f"\n{status}\n{world.data.time:.1f} s\n{state['launcher']}\n{state['hand_gap']:.2f} m\n"
                                + (f"{landing['grip_to_hand']:.2f} m" if landing else '-')
-                               + f"\n{state['held']}\n{state['tension']:.1f} N\n{state['tow_progress']:.2f} m")])
+                               + f"\n{state['held']}\n{state['tension']:.1f} N\n{state['tow_progress']:.2f} m"
+                               f"\n{state['inverted']}")])
             viewer.sync()
             time.sleep(max(0., frame - (time.monotonic() - started)))
 
