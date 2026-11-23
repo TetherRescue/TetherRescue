@@ -1,4 +1,4 @@
-"""잡기·양팔 착용·배 충돌 시험 장면. GUI와 테스트가 같은 장면을 사용한다.
+"""잡기·배 충돌 시험 장면. GUI와 테스트가 같은 장면을 사용한다.
 
 시험용 외력 장치는 배 제어와 구분하며 실제 장면에서는 전달·접근 제어로 대체한다.
 """
@@ -89,7 +89,7 @@ class GraspDemo:
         hand = np.asarray(config.Human.GRIP_L_POINT_B) + np.asarray(self.human.position)
         ring_grip = np.asarray(config.Lifebuoy.GRIP_L_POINT_B)
         position = hand - ring_grip + [.02, 0, 0]
-        self.ring = Lifebuoy(attached=False, position=position, grip_sites=True)
+        self.ring = Lifebuoy(position=position, grip_sites=True)
         self.fixture = PullFixture(position + config.Lifebuoy.TOW_POINT_B + np.array([1.5, 0, 0]))
         self.grasp = HumanGrasp()
         self.rope = Tether(enabled=True, attached=True)
@@ -176,6 +176,9 @@ class WearDemo:
         self.rope.reset(self.world.model)
         self.fixture.target[:] = self.fixture.position
         mujoco.mj_forward(self.world.model, self.world.data)
+
+
+# ─────────────────────────────────────────────────────────────
 
 
 # ─────────────────────────────────────────────────────────────

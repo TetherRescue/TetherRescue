@@ -1,4 +1,4 @@
-"""양팔을 곧게 뻗어 구명환에 동시에 넣는 동작 시험: python -m sim.view_wear."""
+"""양팔을 곧게 뻗어 구명환에 동시에 넣는 동작 시험: python -m sim.world.view_wear."""
 
 import argparse
 import math

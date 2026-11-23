@@ -9,6 +9,7 @@ import mujoco
 import numpy as np
 
 from sim import config
+from sim.world.grasp import HumanGrasp
 from sim.world.human import Human
 from sim.world.lifebuoy import Lifebuoy
 from sim.robot.rescue_approach import RescueApproach
@@ -22,8 +23,36 @@ from sim.world.world import build_world
 from sim.world.watchdog import WatchdogSettings
 
 
-def _build_rescue_world(*, start, victim, yaw, tow_heading, rope):
-    """같은 부유 장면을 접근 단독·전체 시나리오에서 사용한다."""
+HANDOFF_SITE = 'human_handoff_point'
+
+
+class HandoffPoint:
+    """구명환 없는 접근 시연용 목표점. 손에 쥐었다면 구명환 로프 연결점이 있을 사람 로컬 위치에 site만 둔다.
+
+    물리 형상·질량·힘은 없다. 배가 구명환을 건네주러 멈출 자리를 표시하는 용도다.
+    """
+    REQUIRES = {}
+
+    def __init__(self, human):
+        self.human = human
+
+    def build(self, spec):
+        point = Lifebuoy.held_tow_point_b(length_scale=self.human.length_scale)
+        spec.body(config.Names.HUMAN_BODY).add_site(name=HANDOFF_SITE, pos=point, size=[.02, 0, 0],
+                                                    rgba=[.1, .3, 1., 1.])
+
+    def bind(self, model):
+        pass
+
+    def add_forces(self, model, data, acc):
+        pass
+
+
+def _build_rescue_world(*, start, victim, yaw, tow_heading, rope, ring=True, waves=(), extra_parts=()):
+    """같은 부유 장면을 접근 단독·전체 시나리오에서 사용한다. ring=False면 구명환 없이 사람만 띄운다.
+
+    waves: 물 파도 설정 (기본 잔잔). extra_parts: 맵 같은 추가 세계 부품 (예: WolmidoMap).
+    """
     start, victim = np.asarray(start, dtype=float), np.asarray(victim, dtype=float)
     if (start.shape != (2,) or victim.shape != (2,) or not np.isfinite(start).all()
             or not np.isfinite(victim).all() or not math.isfinite(yaw) or not math.isfinite(tow_heading)):
@@ -31,9 +60,16 @@ def _build_rescue_world(*, start, victim, yaw, tow_heading, rope):
     draft = config.Expect.DRAFT
     robot = Robot(position=(*start, config.WaterParams.SURFACE_Z + config.Hull.HEIGHT / 2 - draft),
                   tow_point_b=config.Hull.TOW_POINT_B)
-    human = Human(position=(*victim, config.WaterParams.SURFACE_Z - .03))
-    water = Water(waves=(), floating_bodies=[config.Names.HUMAN_BODY, config.Names.LIFEBUOY_BODY], surface_visual=True)
-    world = build_world(parts=[water, robot, human, Lifebuoy(attached=True), rope])
+    # 구명환을 쥔 왼손이 견인 방향을 보게 몸을 돌린다. 머리가 견인 방향이면 환이 몸 옆 1.35m에 있어
+    # 줄이 옆으로 당겨 배가 목표 옆 22cm에 멈췄다 (차동 추진은 옆으로 못 감, 2026-11-19 측정).
+    human = Human(position=(*victim, config.WaterParams.SURFACE_Z - .03), grip_sites=ring,
+                  yaw=tow_heading - math.pi / 2 if ring else 0.)
+    floating = [config.Names.HUMAN_BODY] + ([config.Names.LIFEBUOY_BODY] if ring else [])
+    water = Water(waves=waves, floating_bodies=floating, surface_visual=True)
+    # 구명환은 몸에 끼우지 않는다. 전체 시나리오는 사람이 이미 왼손에 쥔 상태로 시작하는 시험 흐름이다.
+    victim_parts = ([human, Lifebuoy(held_by=human), HumanGrasp(held=True)] if ring
+                    else [human, HandoffPoint(human)])
+    world = build_world(parts=[water, robot, *victim_parts, rope, *extra_parts])
     address = world.model.jnt_qposadr[robot.joint_id]
     quaternion = [math.cos(yaw / 2), 0, 0, math.sin(yaw / 2)]
     world.model.qpos0[address + 3:address + 7] = quaternion
@@ -42,19 +78,25 @@ def _build_rescue_world(*, start, victim, yaw, tow_heading, rope):
     return world, robot
 
 
-def build_rescue_demo(*, start=(6., 3.), victim=(0., 0.), yaw=0., tow_heading=0.):
-    """기존 접근 단독 API: 로프를 생성하지 않는다. 각도 rad."""
+def build_rescue_demo(*, start=(6., 3.), victim=(0., 0.), yaw=0., tow_heading=0., ring=True, waves=(),
+                      extra_parts=()):
+    """기존 접근 단독 API: 로프를 생성하지 않는다. 각도 rad.
+
+    ring=False: 구명환 없이 떠 있는 사람에게 접근해 건네줄 자리(HandoffPoint)에서 멈춘다.
+    """
     world, robot = _build_rescue_world(start=start, victim=victim, yaw=yaw,
-                                        tow_heading=tow_heading, rope=Tether(enabled=False))
-    return RescueApproach(world, robot, tow_heading=tow_heading)
+                                        tow_heading=tow_heading, rope=Tether(enabled=False), ring=ring,
+                                        waves=waves, extra_parts=extra_parts)
+    return RescueApproach(world, robot, tow_heading=tow_heading, target_site=None if ring else HANDOFF_SITE)
 
 
 def build_rescue_mission(*, start=(6., 3.), victim=(0., 0.), yaw=0., tow_heading=0., tow_distance=6.,
-                         watchdog_settings=None, inference_settings=None, inference_clock=None):
+                         watchdog_settings=None, inference_settings=None, inference_clock=None, waves=(),
+                         extra_parts=()):
     """처음에는 미연결인 tendon을 생성한 전체 구조 시험. 각도 rad."""
     rope = Tether(enabled=True, attached=False)
     world, robot = _build_rescue_world(start=start, victim=victim, yaw=yaw,
-                                       tow_heading=tow_heading, rope=rope)
+                                       tow_heading=tow_heading, rope=rope, waves=waves, extra_parts=extra_parts)
     return RescueMission(world, robot, rope, tow_heading=tow_heading,
                          settings=RescueMissionSettings(tow_distance=tow_distance),
                          watchdog_settings=watchdog_settings, inference_settings=inference_settings,
@@ -125,6 +167,8 @@ def main():
     parser.add_argument('--failure-demo', choices=('timeout', 'nonfinite', 'warning', 'inference'),
                         help='Watchdog 중단 동작을 확인하는 오류 주입 시연')
     parser.add_argument('--approach-only', action='store_true', help='기존 로프 없는 연결 대기 시험')
+    parser.add_argument('--no-ring', action='store_true',
+                        help='구명환 없이 사람에게 접근만 (건네줄 자리에서 정지). --approach-only 포함')
     parser.add_argument('--tow-distance', type=float, default=6., help='연결 후 배의 이동 거리 [m], 4m 초과')
     parser.add_argument('--start', type=float, nargs=2, default=(6, 3), metavar=('X', 'Y'))
     parser.add_argument('--victim', type=float, nargs=2, default=(0, 0), metavar=('X', 'Y'))
@@ -134,8 +178,11 @@ def main():
     args = parser.parse_args()
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error('--timeout은 유한한 양수여야 합니다.')
+    if args.no_ring:
+        args.approach_only = True  # 구명환이 없으면 줄을 묶을 곳이 없어 견인 단계는 실행하지 않는다.
     builder = build_rescue_demo if args.approach_only else build_rescue_mission
-    options = {} if args.approach_only else dict(tow_distance=args.tow_distance)
+    options = (dict(ring=not args.no_ring) if args.approach_only
+               else dict(tow_distance=args.tow_distance))
     manager = builder(start=args.start, victim=args.victim, yaw=math.radians(args.yaw),
                       tow_heading=math.radians(args.heading), **options)
     if args.failure_demo:
@@ -148,6 +195,12 @@ def main():
         except RuntimeError as error:
             parser.exit(1, f'{error}\n')
         return
+    run_viewer(manager, lookat=(np.asarray(args.start) + np.asarray(args.victim)) / 2,
+               distance=max(10., np.linalg.norm(np.asarray(args.start) - np.asarray(args.victim)) + 4))
+
+
+def run_viewer(manager, *, lookat, distance, title='RESCUE SIMULATION'):
+    """구조 시나리오 GUI. view_wolmido 같은 맵 시연도 같은 화면을 쓴다."""
     import mujoco.viewer
 
     world = manager.world
@@ -157,8 +210,8 @@ def main():
     mujoco.mj_copyData(display, world.model, manager.display_data if isinstance(manager, RescueMission) else world.data)
     with mujoco.viewer.launch_passive(world.model, display) as viewer:
         viewer.opt.geomgroup[config.Groups.PHYSICS] = 1
-        viewer.cam.lookat[:] = [*(np.asarray(args.start) + np.asarray(args.victim)) / 2, 0]
-        viewer.cam.distance = max(10., np.linalg.norm(np.asarray(args.start) - np.asarray(args.victim)) + 4)
+        viewer.cam.lookat[:] = [*lookat, 0]
+        viewer.cam.distance = distance
         viewer.cam.azimuth = 100
         viewer.cam.elevation = -35
         budget = 0.
@@ -185,7 +238,7 @@ def main():
             failure_value = (f"\n{manager.failure.code.value} / {manager.failure.stage} @ {manager.failure.time:.2f}s"
                              if mission and manager.failed else '')
             viewer.set_texts([(mujoco.mjtFontScale.mjFONTSCALE_150, mujoco.mjtGridPos.mjGRID_TOPLEFT,
-                               'RESCUE SIMULATION\nPhase\nTime\nEndpoint gap\n'
+                               title + '\nPhase\nTime\nEndpoint gap\n'
                                'Relative speed\nSurface clearance' + extra_labels + failure_label + '\n\nGreen: current boat target',
                                f"\n{state['phase']}\n{display.time:.1f} s\n{state['endpoint_gap']:.3f} m\n"
                                f"{state['relative_speed']:.3f} m/s\n{state['clearance']:.3f} m" + extra_values + failure_value)])
