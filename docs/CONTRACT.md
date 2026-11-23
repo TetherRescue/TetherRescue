@@ -509,6 +509,17 @@ small은 ANSUR II 여성 하위 5%(152.5cm·51.3kg), large는 남성 상위 5%(1
   멀리서 들어오는 중에는 첫 경유점과 같은 방향이어도 지난 것으로 보지 않습니다.
 - `view_launch` 기본 출발은 사람에게서 50m. 측정: 최고 4.0m/s, 22.2초에 발사, 착수 오차 0.05m.
 
+## 하나개 해안 맵 시연 (2026-11-19)
+
+- `CoastalMap`은 세계 조립 담당의 시각용 해안 맵이다. `Water`의 부력은 재사용하고, 넓은 수면 표시는
+  맵이 그린다(`Water(surface_visual=False)`). 맵 geom은 `Groups.VISUAL`·비접촉만 사용한다.
+- 육지는 맵 동쪽 끝에 붙이고 수면 아래까지 내려 띄우지 않는다. 익수자는 해안에서 약 200m 서쪽,
+  배는 해안 근처에서 익수자 쪽을 본다. 실측 좌표·밀물 수면 상승·배·육지 충돌은 후속 작업이다.
+- 실행: `python -m sim.world.view_hanagae`. 조립 검사는 `tests/world/test_coast_map.py`.
+- 전체 틀 실행은 `python -m sim.run_sim`이다. 배는 모래사장에서 시작하고, 출항 후 익수자
+  수평 좌표를 GPS 목표로 자동 표기한 뒤 `PhaseManager`로 항해한다. 육지 충돌이 없어 대기 중
+  배 자세는 시나리오가 붙잡는다. GPS 기기 입력·운반 연출은 후속이다.
+
 ## 최신 main 선체 통합 (2026-11-13)
 
 - Hull·Thruster·Sensors 및 Robot의 기본 흘수 배치·노즐 수면 판정은 main을 유지합니다.
