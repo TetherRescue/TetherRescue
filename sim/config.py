@@ -73,7 +73,7 @@ class Names:
     LIFEBUOY_GRIP_L_SITE = "lifebuoy_grip_l"
     LIFEBUOY_GRIP_R_SITE = "lifebuoy_grip_r"
     HUMAN_RING_GRASP_EQ = "human_ring_grasp"
-    # 착용 weld 이름. 착용 기능은 2026-11-19 삭제했지만 동경 launcher.py가 "착용 weld가 없는지" 검사할 때 쓰므로 이름만 남긴다.
+    # 착용 weld 이름. 손으로 잡은 뒤 스스로 착용(SelfWear)할 때 켜진다. 동경 launcher.py도 "착용 weld가 없는지" 검사할 때 쓴다.
     HUMAN_RING_WORN_EQ = "human_ring_worn"
     HUMAN_ARM_BODY_PREFIX = "human_arm_body"
     HUMAN_ARM_JOINT_PREFIX = "human_arm_joint"
@@ -720,9 +720,13 @@ class Lifebuoy:
     # 전체 질량 [kg]. 캡슐 12개에 나눠 주며 12배로 증가시키지 않는다.
     # 2026-11-16 가영: 2.0 → 2.5kg (LSA Code 최소 질량). 사람 70kg + 환 2.5kg = 72.5kg.
     MASS = 2.5
-    # 2026-11-19 가영: 구명환은 사람 몸에 끼우지 않는다. 착용 위치(POSITION_IN_HUMAN_B)·착용 weld를 삭제했다.
-    #   사람과 구명환의 연결은 손으로 잡는 HumanGrasp만 쓴다 (처음부터 쥔 시험은 Lifebuoy(held_by=human)).
+    # 2026-11-19 가영: 처음부터 몸에 끼운 상태(Lifebuoy(attached=True))로는 시작하지 않는다.
+    # 2026-11-23 가영 정정: 손으로 잡은 뒤 사람이 스스로 착용하는 흐름(wear.py SelfWear)은 유지한다.
+    #   착용이 끝나면 SelfWear가 착용 weld(Names.HUMAN_RING_WORN_EQ)를 켠다.
     INDEPENDENT_POSITION_W = (1.2, 0.0, 1.0)  # 독립 시험의 정면 전달 위치
+    # 착용 목표 위치: 사람 좌표에서 머리 쪽(+x)으로 0.35m인 상체 부근 (SelfWear·WearApproachFixture가 씀).
+    # 환은 사람의 x축에 수직인 yz 평면에 놓여 상자 몸통을 둘러싼다.
+    POSITION_IN_HUMAN_B = (0.35, 0.0, 0.0)
     # 환 로컬 좌표의 로프 연결점 [m]. 현재는 환 표면의 시험 위치이며 정확한 묶음 위치는 조정 대상.
     # 배를 +x 방향에 둔 시험을 가정: +x 쪽 튜브 표면, y가 양수인 테두리.
     TOW_POINT_B = (TUBE_RADIUS, CENTERLINE_RADIUS, 0.0)

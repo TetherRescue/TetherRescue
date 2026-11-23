@@ -129,10 +129,12 @@
   착수 잡는 점–손 거리 0.05m(파도 0.21m), 사람 진행 약 6.1m. 이전의 '끌고 가서 줄 풀기' 방식(`wolmido_mission.py`)은 삭제.
 - 해류(썰물 흐름) 환경은 물 담당(`Owner.CURRENT`)의 해류 지원 후 추가합니다.
 
-## 구명환 착용 삭제 (2026-11-19, 가영)
+## 구명환 착용 — 처음부터 끼운 상태 삭제, 스스로 착용은 유지 (2026-11-19 · 11/23 정정, 가영)
 
-- 구명환은 사람 몸에 끼우지 않습니다. 착용 weld(`human_ring_worn`)·`Lifebuoy(attached=True)`·`POSITION_IN_HUMAN_B`,
-  양팔 착용(`SelfWear`·`wear.py`·`view_wear.py`·`WearDemo`·`WearApproachFixture`)을 삭제했습니다. 아래 절의 착용 관련 설명은 지난 기록입니다.
+- 처음부터 몸에 끼운 상태(`Lifebuoy(attached=True)`)로는 시작하지 않습니다 (2026-11-19 삭제).
+- **2026-11-23 정정**: 11/19에 양팔 착용(`SelfWear`·`wear.py`·`view_wear.py`·`WearDemo`·`WearApproachFixture`)과
+  `POSITION_IN_HUMAN_B`까지 지웠는데, 시나리오 5-1 "익수자가 구명환을 잡거나 몸에 끼운다"에 맞게 **11/19 이전 코드 그대로 되살렸습니다**
+  (파일 위치만 `sim/world/`, `tests/world/`). 손으로 잡은 뒤 스스로 착용하면 착용 weld(`human_ring_worn`)가 켜집니다.
 - 사람↔구명환 연결은 손 잡기(`HumanGrasp`)만 씁니다. 처음부터 쥔 시험은 `Human(grip_sites=True)` →
   `Lifebuoy(held_by=human)` → `HumanGrasp(held=True)`로 조립합니다. 환은 왼손 잡기점 옆 2cm에 놓이고,
   잡기 weld는 켜진 채 시작해 `mj_resetData` 뒤에도 켜진 상태로 돌아옵니다. 손 기준 로프 연결점은 `Lifebuoy.held_tow_point_b()`.
