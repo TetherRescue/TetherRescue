@@ -938,3 +938,99 @@ def test_planing_lift_damps_heave():
     assert along_keel is None or np.linalg.norm(along_keel) < 1e-9   # 반올림 오차로 아주 작은 값이 남을 수 있음
     # 뱃머리가 숙여져 있어도 빠르게 내려앉으면 바닥이 물을 쳐서 받친다
     assert _lift(-1.0, 8.0, vz=-0.5)[0] is not None
+
+
+# ─────────────────────────────────────────────────────────────
+# 파도 수면 표시 (화면 전용 높이맵 패치)
+# ─────────────────────────────────────────────────────────────
+WAVES = WaterParams.WAVES_DEFAULT
+
+
+def _ray_down(world, x, y):
+    """(x, y) 위 5 m 에서 아래로 쏜 광선이 처음 닿는 높이와 geom 번호."""
+    geom = np.zeros(1, np.int32)
+    dist = mujoco.mj_ray(world.model, world.data, np.array([x, y, 5.0]), np.array([0.0, 0.0, -1.0]),
+                         None, 1, -1, geom)
+    return 5.0 - dist, int(geom[0])
+
+
+def test_calm_surface_visual_stays_flat_plane():
+    # 파도가 없으면 예전과 같은 평면, 높이맵 없음 → update 는 아무것도 안 함
+    world = build_world(parts=(Water(waves=CALM, surface_visual=True), Robot()))
+    water_part = world.parts[0]
+    model = world.model
+    assert model.geom(config.Names.WATER_SURFACE_GEOM).type == mujoco.mjtGeom.mjGEOM_PLANE
+    assert model.nhfield == 0
+    assert water_part.update_surface_visual(model, world.data) is None
+
+
+def test_wave_surface_visual_follows_wave_height():
+    # 파도가 있으면 평면 대신 높이맵. 패치 안쪽 아무 점이나 위에서 광선을 쏘면 그 시각의 파도 높이에 닿는다
+    world = build_world(parts=(Water(waves=WAVES, surface_visual=True), Robot()))
+    water_part, robot = world.parts
+    model, data = world.model, world.data
+    assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, config.Names.WATER_SURFACE_GEOM) == -1
+    data.time = 3.7
+    hfield = water_part.update_surface_visual(model, data)
+    assert hfield == model.hfield(water.WAVE_SURFACE_GEOM).id
+    mujoco.mj_forward(model, data)
+    boat = data.xpos[robot.body_id]
+    surface_geom = model.geom(water.WAVE_SURFACE_GEOM).id
+    for dx, dy in [(5.0, 0.0), (-7.3, 4.1), (0.6, -12.2), (15.0, 15.0)]:
+        x, y = boat[0] + dx, boat[1] + dy
+        z, geom = _ray_down(world, x, y)
+        assert geom == surface_geom
+        assert z == pytest.approx(water.wave_height(x, y, data.time, WAVES), abs=0.01)   # 격자 보간 오차 1 cm 이내
+
+
+def test_wave_surface_visual_follows_boat_on_grid():
+    # 패치 가운데는 배 위치를 격자 간격으로 맞춘 곳 (물결이 미끄러져 보이지 않게)
+    world = build_world(parts=(Water(waves=WAVES, surface_visual=True), Robot()))
+    water_part, robot = world.parts
+    world.data.qpos[robot.qpos_adr:robot.qpos_adr + 2] = (12.34, -5.67)
+    mujoco.mj_forward(world.model, world.data)
+    water_part.update_surface_visual(world.model, world.data)
+    center = world.model.geom(water.WAVE_SURFACE_GEOM).pos[:2]
+    step = water.WAVE_SURFACE_STEP
+    assert np.allclose(center / step, np.round(center / step))
+    assert np.all(np.abs(center - world.data.xpos[robot.body_id][:2]) <= step / 2 + 1e-9)
+
+
+def test_wave_surface_edge_fades_to_mean_level():
+    # 패치 가장자리는 평균 수면 → 바깥 평평한 바다와 이어진다
+    heights = water.wave_surface_heights((3.0, -2.0), 1.3, WAVES)
+    surface = WaterParams.SURFACE_Z
+    for edge in (heights[0], heights[-1], heights[:, 0], heights[:, -1]):
+        assert np.allclose(edge, surface)
+    assert np.ptp(heights) > 0.05                           # 가운데는 실제로 출렁인다
+
+
+def test_wave_surface_visual_does_not_change_forces():
+    # 화면 전용: 같은 상태에서 물이 배에 주는 힘은 패치를 켜든 끄든 같다
+    def forces(visual):
+        world = build_world(parts=(Water(waves=WAVES, surface_visual=visual), Robot()))
+        water_part = world.parts[0]
+        world.data.time = 2.0
+        water_part.update_surface_visual(world.model, world.data)
+        mujoco.mj_forward(world.model, world.data)
+        world.acc.reset()
+        water_part.add_forces(world.model, world.data, world.acc)
+        world.acc.apply(world.model, world.data)
+        return world.data.xfrc_applied.copy()
+    assert np.allclose(forces(True), forces(False))
+
+
+def test_coast_map_lowers_flat_sea_below_wave_troughs():
+    # 해안 맵: 파도가 있으면 평평한 바다 판 윗면이 가장 낮은 골보다 아래 → 파도 수면을 가리지 않음
+    from sim.world.coast_map import build_hanagae_world
+    for waves, has_patch in ((CALM, False), (WAVES, True)):
+        world, *_ = build_hanagae_world(waves=waves)
+        model = world.model
+        sea = model.geom('hanagae_water_surface')
+        top = sea.pos[2] + sea.size[2]
+        assert (mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, water.WAVE_SURFACE_GEOM) >= 0) == has_patch
+        if has_patch:
+            assert top < WaterParams.SURFACE_Z - water.wave_amplitude(waves)
+        else:
+            assert top == pytest.approx(WaterParams.SURFACE_Z + .05)
+

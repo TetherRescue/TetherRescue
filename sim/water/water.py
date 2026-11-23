@@ -513,15 +513,59 @@ def added_mass_force_w(data, body_id, accel_w, added_mass_b):
 
 
 # ─────────────────────────────────────────────────────────────
+# 파도 수면 표시 (화면 전용): 배를 따라다니는 높이맵(hfield) 패치
+# ─────────────────────────────────────────────────────────────
+# 파도는 부력·노즐 판정에는 들어가지만, 예전 수면 표시는 평평한 판 하나라 "배만 출렁이고 물은 가만히" 보였다
+# (2026-11-23 팀원 피드백). 파도가 있으면 격자 높이맵을 깔고, 화면 프레임마다 wave_height 로 높이를 채운다.
+#   - 물리에는 영향 없음: 접촉 끔(contype 0), worldbody 고정 geom 이라 질량도 없다.
+#   - 바다 전체(수백 m)를 촘촘히 깔면 프레임마다 계산이 무거워서 배 주변 50 m 만 깔고 배를 따라 옮긴다.
+#     옮길 때 격자 간격 단위로 끊어 옮겨야 물결이 미끄러져 보이지 않는다.
+#   - 가장자리 FADE 구간에서 파도를 평균 수면으로 줄여, 바깥 평평한 바다와 이어지게 한다.
+WAVE_SURFACE_GEOM = "water_wave_surface"    # 파도 수면 geom 이름 (hfield 도 같은 이름)
+WAVE_SURFACE_HALF = 25.0                    # 패치 반폭 [m] → 50 m × 50 m
+WAVE_SURFACE_STEP = 0.25                    # 격자 간격 [m]. 가장 짧은 기본 파장 2 m 를 8칸으로
+WAVE_SURFACE_FADE = 5.0                     # 가장자리에서 파도가 0 으로 줄어드는 폭 [m]
+WAVE_SURFACE_BASE = 0.05                    # 높이맵 밑판 두께 [m] (MuJoCo hfield 필수값, 화면에만 영향)
+
+
+def wave_amplitude(waves):
+    """파도 성분 진폭의 합 = 수면이 평균에서 오르내릴 수 있는 최대 높이 [m]."""
+    return float(sum(abs(amp) for amp, *_ in waves))
+
+
+def wave_surface_grid():
+    """패치 한 변의 칸 중심 좌표 (패치 가운데 기준) [m] 배열."""
+    n = int(round(2 * WAVE_SURFACE_HALF / WAVE_SURFACE_STEP)) + 1
+    return np.linspace(-WAVE_SURFACE_HALF, WAVE_SURFACE_HALF, n)
+
+
+def wave_surface_heights(center_xy, t, waves):
+    """패치 격자의 수면 높이 (nrow=y, ncol=x) [m]. 가장자리 FADE 구간은 평균 수면 쪽으로 줄인다."""
+    axis = wave_surface_grid()
+    gx, gy = np.meshgrid(center_xy[0] + axis, center_xy[1] + axis)   # 행 = y, 열 = x (MuJoCo hfield 순서)
+    edge = WAVE_SURFACE_HALF - np.maximum(np.abs(axis)[None, :], np.abs(axis)[:, None])
+    fade = np.clip(edge / WAVE_SURFACE_FADE, 0.0, 1.0)
+    surface = config.WaterParams.SURFACE_Z
+    return surface + fade * (wave_height(gx, gy, t, waves) - surface)
+
+
+# ─────────────────────────────────────────────────────────────
 # 물 모듈 본체
 # ─────────────────────────────────────────────────────────────
 class Water:
     # 요구사항은 config 한 곳에만 적고 여기서는 가져다 쓴다 (값을 두 곳에 두지 않기).
     REQUIRES = config.WaterParams.REQUIRES
 
-    def __init__(self, waves=config.WaterParams.WAVES_DEFAULT, *, floating_bodies=(), surface_visual=False, include_boat=True):
+    def __init__(self, waves=config.WaterParams.WAVES_DEFAULT, *, floating_bodies=(), surface_visual=False, include_boat=True,
+                 wave_visual=None):
+        """surface_visual: 수면을 화면에 그린다. 파도가 없으면 평평한 판, 파도가 있으면 출렁이는 패치.
+        wave_visual: 파도 패치만 따로 켜고 끈다. None 이면 surface_visual 을 따른다.
+          해안 맵처럼 넓은 평평한 바다를 직접 그리는 곳은 surface_visual=False, wave_visual=True 로 쓴다.
+        파도 패치는 화면 루프에서 update_surface_visual() 을 불러야 움직인다.
+        """
         self.waves = waves
         self.surface_visual = surface_visual
+        self.wave_visual = bool(waves) and (surface_visual if wave_visual is None else wave_visual)
         self.include_boat = include_boat
         # 사람·구명환의 실험 부력은 명시적으로 선택한다. 선체 부력은 기본 적용.
         self.floating_bodies = tuple(floating_bodies)
@@ -532,15 +576,51 @@ class Water:
         return wave_height(x, y, t, self.waves)
 
     def build(self, spec):
-        """선택한 수면 표시는 접촉·질량이 없는 평면이다 (파도 변형은 미표시)."""
-        if self.surface_visual:
-            import mujoco
+        """선택한 수면 표시는 접촉·질량이 없다. 파도가 있으면 높이맵 패치, 없으면 평면."""
+        import mujoco
+        group = 0 if config.Groups.VISUAL is None else config.Groups.VISUAL
+        if self.wave_visual:
+            # 높이 = geom 높이 + 값(0~1) × top. 가장 낮은 골(평균 − 진폭합)을 0, 가장 높은 마루를 1 로 둔다
+            amp = max(wave_amplitude(self.waves), 1e-3)
+            n = len(wave_surface_grid())
+            spec.add_hfield(name=WAVE_SURFACE_GEOM, nrow=n, ncol=n, userdata=[0.5] * (n * n),
+                            size=[WAVE_SURFACE_HALF, WAVE_SURFACE_HALF, 2 * amp, WAVE_SURFACE_BASE])
+            spec.worldbody.add_geom(name=WAVE_SURFACE_GEOM, type=mujoco.mjtGeom.mjGEOM_HFIELD,
+                                    hfieldname=WAVE_SURFACE_GEOM,
+                                    pos=[0, 0, config.WaterParams.SURFACE_Z - amp],
+                                    rgba=[.06, .32, .45, .6], contype=0, conaffinity=0, group=group)
+        if self.surface_visual and not self.wave_visual:
             spec.worldbody.add_geom(name=config.Names.WATER_SURFACE_GEOM,
                                     type=mujoco.mjtGeom.mjGEOM_PLANE,
                                     pos=[0, 0, config.WaterParams.SURFACE_Z], size=[50, 50, .1],
-                                    rgba=[.06, .32, .45, .4], contype=0, conaffinity=0,
-                                    group=0 if config.Groups.VISUAL is None else config.Groups.VISUAL)
+                                    rgba=[.06, .32, .45, .4], contype=0, conaffinity=0, group=group)
+        if self.surface_visual:
             spec.worldbody.add_light(pos=[0, 0, 8], dir=[0, 0, -1], diffuse=[.7, .7, .7])
+
+    def update_surface_visual(self, model, data, viewer=None, center_xy=None):
+        """파도 수면 패치를 지금 시각(data.time)의 파도 높이로 채운다. 화면 프레임마다 부른다.
+
+        center_xy: 패치 가운데 (x, y). None 이면 배 위치 (배가 없으면 원점). 격자 간격 단위로 맞춘다.
+        viewer: mujoco.viewer 핸들을 주면 바뀐 높이맵을 화면에 올린다 (viewer.update_hfield).
+          높이 값은 viewer.lock() 안에서 바꾸고, 이 함수는 lock 밖에서 viewer 와 함께 부르는 것을 권장.
+        돌려주는 값: 높이맵 번호 (화면에 올릴 때 viewer.update_hfield 에 넘김). 파도 패치가 없으면 None.
+        """
+        if self._wave_hfield is None:
+            return None
+        if center_xy is None:
+            center_xy = (0.0, 0.0) if self.body_id is None else data.xpos[self.body_id][:2]
+        center = np.round(np.asarray(center_xy, dtype=float) / WAVE_SURFACE_STEP) * WAVE_SURFACE_STEP
+        hfield_id, geom_id = self._wave_hfield
+        heights = wave_surface_heights(center, data.time, self.waves)
+        low = model.geom_pos[geom_id][2]
+        top = model.hfield_size[hfield_id][2]
+        adr, count = model.hfield_adr[hfield_id], model.hfield_nrow[hfield_id] * model.hfield_ncol[hfield_id]
+        model.hfield_data[adr:adr + count] = np.clip((heights - low) / top, 0.0, 1.0).ravel()
+        model.geom_pos[geom_id][:2] = center
+        data.geom_xpos[geom_id][:2] = center     # 다음 mj_forward 전에도 화면에 바로 반영
+        if viewer is not None:
+            viewer.update_hfield(hfield_id)
+        return int(hfield_id)
 
     def bind(self, model):
         """선체 복셀과 명시한 고정 연결 몸체의 합집합 복셀을 준비한다."""
@@ -548,6 +628,11 @@ class Water:
         import mujoco
 
         self.targets = []
+        # 파도 수면 패치 (hfield 번호, geom 번호). 없으면 None
+        self._wave_hfield = None
+        if self.wave_visual:
+            self._wave_hfield = (mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_HFIELD, WAVE_SURFACE_GEOM),
+                                 mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, WAVE_SURFACE_GEOM))
         # 부가질량 (선체만). 꺼져 있으면 None. 켜져 있으면 bind 때 축별 부가질량을 한 번 계산
         self.added_mass_b = None
         self._prev_vel = None   # (시각, 월드 속도): 가속도 = 속도 차이 ÷ 시간 간격 을 구하려고 기억

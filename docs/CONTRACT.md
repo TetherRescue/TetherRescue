@@ -512,7 +512,11 @@ small은 ANSUR II 여성 하위 5%(152.5cm·51.3kg), large는 남성 상위 5%(1
 ## 하나개 해안 맵 시연 (2026-11-19)
 
 - `CoastalMap`은 세계 조립 담당의 시각용 해안 맵이다. `Water`의 부력은 재사용하고, 넓은 수면 표시는
-  맵이 그린다(`Water(surface_visual=False)`). 맵 geom은 `Groups.VISUAL`·비접촉만 사용한다.
+  맵이 그린다(`Water(surface_visual=False, wave_visual=True)`). 맵 geom은 `Groups.VISUAL`·비접촉만 사용한다.
+- 파도가 켜져 있으면(`--waves`) 배 주변 50 m 출렁이는 수면은 `Water`가 높이맵으로 그린다 (2026-11-23).
+  화면 루프에서 `Water.update_surface_visual()`을 불러야 움직이며(`run_sim`에 연결), 접촉이 없어 물리에는
+  영향이 없다. 이때 맵은 평평한 바다 판·갯벌 윗면을 가장 낮은 파도 골 아래로 내려 파도 수면을 가리지 않는다
+  (`CoastalMap(wave_amplitude=...)`). 파도가 없으면 맵의 평평한 바다 판만 보인다.
 - 육지는 맵 동쪽 끝에 붙이고 수면 아래까지 내려 띄우지 않는다. 익수자는 해안에서 약 200m 서쪽,
   배는 해안 근처에서 익수자 쪽을 본다. 실측 좌표·밀물 수면 상승·배·육지 충돌은 후속 작업이다.
 - 실행: `python -m sim.world.view_hanagae`. 조립 검사는 `tests/world/test_coast_map.py`.

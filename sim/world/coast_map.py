@@ -50,18 +50,26 @@ class CoastalMap:
 
     REQUIRES = {}
 
-    def __init__(self, *, scene='hanagae'):
+    def __init__(self, *, scene='hanagae', wave_amplitude=0.0):
+        """wave_amplitude: 파도 진폭 합 [m]. 0 보다 크면 평평한 바다 판을 파도 골 아래로 내린다.
+        파도 수면은 Water(wave_visual=True) 가 배 주변에 따로 그린다 → 평평한 판이 골을 가리지 않게.
+        """
         if scene != 'hanagae':
             raise ValueError('지원하는 장면은 hanagae뿐입니다.')
         self.scene = scene
+        self.wave_amplitude = float(wave_amplitude)
 
     def build(self, spec):
         surface = config.WaterParams.SURFACE_Z
         y0, y1 = -SEA_HALF_Y, SEA_HALF_Y
 
+        # 파도가 있으면 수면 판·갯벌 윗면을 가장 낮은 파도 골보다 1 cm 아래로 내린다 (파도 수면을 가리지 않게)
+        drop = self.wave_amplitude + .06 if self.wave_amplitude > 0 else 0.0
+
         # 넓은 수면 (Water 기본 50m 평면 대신 맵이 표시)
+        sea_z = surface - drop
         _visual_box(spec, name='hanagae_water_surface',
-                    pos=((SEA_WEST + SHORE_X) / 2, 0, surface),
+                    pos=((SEA_WEST + SHORE_X) / 2, 0, sea_z),
                     size=((SHORE_X - SEA_WEST) / 2, SEA_HALF_Y, .05),
                     rgba=(.06, .32, .45, .45))
         spec.worldbody.add_light(pos=(SHORE_X - 40, 0, 40), dir=(0, 0, -1), diffuse=(.75, .75, .75))
@@ -75,7 +83,7 @@ class CoastalMap:
         # 갯벌(고립 구간): 해안 바로 앞, 수면 아래이지만 육지와 이어짐
         _box_from_bounds(spec, name='hanagae_tidal_flat',
                          x0=SHORE_X - FLAT_WIDTH, x1=SHORE_X, y0=y0, y1=y1,
-                         z0=surface - LAND_DEPTH, z1=surface - .05,
+                         z0=surface - LAND_DEPTH, z1=surface - .05 - drop,
                          rgba=(.45, .38, .22, 1))
 
         # 모래사장: 해안선에서 내륙으로, 바닥은 수면 아래까지 내려 띄우지 않음
@@ -173,11 +181,12 @@ def build_hanagae_world(*, waves=None, boat_on_land=False, victim_range=VICTIM_R
     if waves is None:
         waves = config.WaterParams.WAVES_CALM
     position, yaw = land_boat_pose() if boat_on_land else water_launch_pose()
-    # 맵이 넓은 수면을 그리므로 Water의 50m 기본 평면은 끈다.
-    water = Water(waves=waves, surface_visual=False,
+    # 맵이 넓은 수면을 그리므로 Water의 50m 기본 평면은 끈다. 파도가 있으면 배 주변 파도 수면만 Water가 그린다.
+    water = Water(waves=waves, surface_visual=False, wave_visual=True,
                   floating_bodies=[config.Names.HUMAN_BODY])
     robot = Robot(surface_height=water.wave_height, position=position)
     human = Human(position=victim_spawn_position(range_m=victim_range))
-    world = build_world(parts=[water, CoastalMap(), robot, human])
+    from sim.water.water import wave_amplitude
+    world = build_world(parts=[water, CoastalMap(wave_amplitude=wave_amplitude(waves)), robot, human])
     _set_boat_pose(world, robot, position, yaw)
     return world, robot, water, human
