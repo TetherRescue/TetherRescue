@@ -1,11 +1,11 @@
-"""[시험용] 월미도 날씨 구조 시나리오: python -m sim.world.view_weather [--weather clear|storm|fog] [--tide high|low]
+"""[시험용] 월미도 날씨 구조 시나리오: python -m sim.world.view_weather [--weather clear|rain|fog] [--tide high|low]
 [--speed 2] [--headless]
 
 view_wolmido와 같은 구조 흐름(동경 Launcher·LaunchMission)에 날씨만 더한다 (브랜치 try/weather, 가영 2026-11-20).
   clear  맑음: 잔잔한 물, 밝은 하늘
-  storm  비/폭풍: 큰 파도(진폭 합 0.2 m, 화면에도 파도 모양 수면), 굵은 비, 어두운 하늘
+  rain   비: 잔잔한 물, 굵은 비, 어두운 하늘, 가시거리 70 m
   fog    안개: 잔잔한 물, 가시거리 25 m
-물때(--tide)는 날씨와 따로 고른다. 사람은 구명환을 잡기 전까지 발버둥 친다 (--calm-person 으로 끔). 기존 view_wolmido·config는 바꾸지 않는다.
+물때(--tide)는 날씨와 따로 고른다. 사람은 구명환을 잡기 전까지 물속에 선 자세로 발버둥 친다 (--calm-person 으로 끔). 기존 view_wolmido·config는 바꾸지 않는다.
 """
 
 import argparse
@@ -63,7 +63,7 @@ def build_weather(name='clear', tide='high', *, struggle=True, launch=None, watc
     if waves:
         parts.append(WaveSurface(waves, rgba=sky.setting['water_rgba']))
     if struggle:
-        parts.append(Struggle(human, grasp))
+        parts.append(Struggle(human, grasp, facing=tow_heading))   # 선 자세, 얼굴은 배가 오는 해변 쪽
     world = build_world(parts=parts)
     mujoco.mj_forward(world.model, world.data)
     mission = LaunchMission(world, robot, launcher, grasp, rope, tow_heading=tow_heading,
