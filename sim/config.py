@@ -28,6 +28,10 @@ class Names:
     # 무엇: 배(선체) 부품의 이름표.
     # 사용: 물(부력·저항을 이 배에 걸고, 배 무게 body_subtreemass 를 읽음), 로봇(추력을 이 배에 걸음)
     WATER_SURFACE_GEOM = "water_surface"
+    # 무엇: 파도가 있을 때 화면에 그리는 출렁이는 수면 (geom 과 메시가 같은 이름). 화면 전용, 접촉·질량 없음.
+    #       파도가 없으면 위의 WATER_SURFACE_GEOM(평평한 판)을 대신 그린다.
+    # 사용: 물 — build 에서 만들고 bind 에서 id 를 찾아 화면 프레임마다 꼭짓점을 바꾼다. 테스트가 이 이름으로 찾는다
+    WAVE_SURFACE_GEOM = "water_wave_surface"
     APPROACH_TARGET_SITE = "approach_target"
     BOAT_BODY = "boat"
     # 무엇: 배에 붙은 자유 관절(freejoint)의 이름. free = 이동 3방향 + 회전 3방향이 모두 자유롭다는 뜻.

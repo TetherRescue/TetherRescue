@@ -544,7 +544,6 @@ def added_mass_force_w(data, body_id, accel_w, added_mass_b):
 #   - 높이맵(hfield) 대신 메시: 높이맵은 가장자리 옆면 벽을 항상 그려서, 반투명 물 너머로 패치 테두리가 선으로 보였다.
 #     메시는 윗면만 그린다. 꼭짓점은 월드 좌표로 계산한 뒤 메시 좌표로 바꿔 넣는다
 #     (MuJoCo 가 컴파일 때 메시를 무게중심 기준으로 옮기고 돌리므로, bind 에서 그 변환을 한 번 읽어 둔다).
-WAVE_SURFACE_GEOM = "water_wave_surface"    # 파도 수면 geom 이름 (메시도 같은 이름)
 WAVE_SURFACE_HALF = 25.0                    # 패치 반폭 [m] → 50 m × 50 m
 WAVE_SURFACE_STEP = 0.5                     # 격자 간격 [m]. 가장 짧은 기본 파장 2 m 를 4칸으로. 0.25 m 는 메시
                                             # 갱신·업로드·그리기가 프레임당 약 26 ms 라 느렸다 (2026-11-23 측정).
@@ -709,11 +708,11 @@ class Water:
             # sea_bounds 가 있으면 바깥 평평한 바다도 같은 메시에 넣는다. 판을 따로 두면 메시 업로드(즉시)와
             # 판 위치 반영(viewer.sync)이 다른 순간이라, 그 사이 그려진 프레임에서 뒤쪽 테두리에 틈이 깜빡였다
             verts, _ = wave_surface_mesh((0.0, 0.0), 0.0, self.waves, self.sea_bounds)
-            spec.add_mesh(name=WAVE_SURFACE_GEOM, uservert=verts.ravel().tolist(),
+            spec.add_mesh(name=config.Names.WAVE_SURFACE_GEOM, uservert=verts.ravel().tolist(),
                           userface=wave_surface_faces(self.sea_bounds is not None).ravel().tolist(),
                           inertia=mujoco.mjtMeshInertia.mjMESH_INERTIA_SHELL)
-            spec.worldbody.add_geom(name=WAVE_SURFACE_GEOM, type=mujoco.mjtGeom.mjGEOM_MESH,
-                                    meshname=WAVE_SURFACE_GEOM,
+            spec.worldbody.add_geom(name=config.Names.WAVE_SURFACE_GEOM, type=mujoco.mjtGeom.mjGEOM_MESH,
+                                    meshname=config.Names.WAVE_SURFACE_GEOM,
                                     rgba=list(self.sea_rgba), contype=0, conaffinity=0, group=group)
         if self.surface_visual and not self.wave_visual:
             spec.worldbody.add_geom(name=config.Names.WATER_SURFACE_GEOM,
@@ -756,8 +755,8 @@ class Water:
         # MuJoCo 는 컴파일 때 메시를 옮기고 돌린다 → 월드 꼭짓점 = R · v_mesh + p (worldbody 고정 geom 이라 상수)
         self._wave_mesh = None
         if self.wave_visual:
-            mesh_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_MESH, WAVE_SURFACE_GEOM)
-            geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, WAVE_SURFACE_GEOM)
+            mesh_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_MESH, config.Names.WAVE_SURFACE_GEOM)
+            geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, config.Names.WAVE_SURFACE_GEOM)
             assert mesh_id >= 0 and geom_id >= 0, "파도 수면 메시를 찾지 못함"
             count = len(wave_surface_grid()) ** 2 + (SEA_RING_CORNERS if self.sea_bounds is not None else 0)
             # 꼭짓점 i 의 법선 = 법선 i 여야 꼭짓점·법선을 같은 순서로 덮어쓸 수 있다
