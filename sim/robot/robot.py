@@ -3,10 +3,16 @@ import mujoco
 import numpy as np
 
 from sim import config, frames
-from sim.config import Hull, Names, Sensors, Thruster, Winch
+from sim.config import Hull, Inversion, Names, Sensors, Thruster, Winch
 
 SITE_SIZE = (0.03,)   # 점(site) 표시 크기 [m]. 그림용이라 물리에 영향 없음
 HULL_RGBA = (0.9, 0.4, 0.1, 1.0)
+# 카메라 무게는 회전 팔 몸체에 따로 둔다. 배 몸체 = Hull.PARTS 에서 카메라를 뺀 나머지
+CAMERA_MASS = Hull.PARTS["camera"][0]
+FRAME_MASS, FRAME_COM, FRAME_INERTIA = config._mass_properties(
+    Hull.SHELL_MASS, (Hull.LENGTH, Hull.BEAM, Hull.HEIGHT),
+    {name: part for name, part in Hull.PARTS.items() if name != "camera"},
+    shell_center=(Hull.WATERPLANE_CENTER_X, 0.0, 0.0))
 # A형 선체 충돌 형상 이름 (왼쪽 다리, 오른쪽 다리, 연결부, 뱃머리). config.Hull.SHAPE == "a_frame" 일 때 생김
 A_FRAME_GEOMS = ("hull_leg_l", "hull_leg_r", "hull_bridge", "hull_bow")
 
@@ -27,6 +33,7 @@ class Robot:
           세계에 Tether(enabled=True, attached=True) 가 있어야 한다 (로프 자체·장력 계산은 가영 tether.py).
         """
         self.winch = bool(winch)
+        self.inverted = False      # 상하 뒤바뀜 판정 (config.Inversion). 뒤집혀도 멈추지 않고 계속 추진
         self.delivery_state = STOWED if self.winch else None
         self._model = None
         self.throttle = 0.0   # 전진 명령 (−1 최대 후진 ~ +1 최대 전진)
@@ -98,11 +105,10 @@ class Robot:
                                        quat=(np.cos(self.yaw / 2), 0.0, 0.0, np.sin(self.yaw / 2)))
         body.add_freejoint(name=Names.BOAT_FREE)
 
-        # 질량은 geom 밀도로 자동 계산하지 않고 config 값을 그대로 넣음 (물의 흘수 정답값과 같은 숫자여야 함)
+        # 질량은 geom 밀도로 자동 계산하지 않고 config 값을 그대로 넣음 (물의 흘수 정답값과 같은 숫자여야 함).
+        # 카메라(Hull.PARTS camera)는 회전 팔 몸체에 따로 넣는다 → 배 몸체 + 팔 = Hull.MASS·COM (팔이 원래 자리일 때)
         body.explicitinertial = True
-        body.mass = Hull.MASS
-        body.ipos = Hull.COM
-        body.inertia = Hull.INERTIA
+        body.mass, body.ipos, body.inertia = FRAME_MASS, FRAME_COM, FRAME_INERTIA
 
         # 감싸는 상자: 물이 이 크기로 복셀을 만든 뒤 모양(hull_contains) 밖을 버린다. 직육면체일 때만 이 상자가 곧 선체
         box = Hull.SHAPE == "box"
@@ -126,7 +132,14 @@ class Robot:
         # MuJoCo 카메라는 자기 −z 로 보고 +y 가 화면 위. 몸체(FLU)로 쓰면
         #   화면 오른쪽 = −y_b, 화면 위 = (sin p, 0, cos p), 보는 방향 = (cos p, 0, −sin p)  (p = 아래로 숙인 각)
         pitch = Sensors.CAMERA_PITCH_DOWN or 0.0   # 비전 담당과 합의 전엔 수평
-        cam = body.add_camera(name=Names.CAMERA_BOW, pos=Sensors.CAMERA_POS_B)
+        # 카메라 회전 팔: 원점에서 몸체 x 축 둘레로 도는 경첩. 카메라 무게(점 질량)와 카메라가 여기 달린다.
+        # 뒤집히면 add_forces 가 모터 돌림힘(반작용은 배)으로 반 바퀴 돌려 카메라를 다시 위로 올린다.
+        arm = body.add_body(name=Names.CAMERA_ARM_BODY)
+        arm.add_joint(name=Names.CAMERA_ARM_JOINT, type=mujoco.mjtJoint.mjJNT_HINGE, axis=(1.0, 0.0, 0.0))
+        arm.explicitinertial = True
+        arm.mass, arm.ipos = CAMERA_MASS, Sensors.CAMERA_POS_B
+        arm.inertia = (1e-4, 1e-4, 1e-4)   # 카메라 상자 자체의 작은 관성 (팔 회전 관성은 질량 × 반지름² 이 대부분)
+        cam = arm.add_camera(name=Names.CAMERA_BOW, pos=Sensors.CAMERA_POS_B)
         cam.alt.type = mujoco.mjtOrientation.mjORIENTATION_XYAXES
         cam.alt.xyaxes = (0.0, -1.0, 0.0, np.sin(pitch), 0.0, np.cos(pitch))
         if Sensors.CAMERA_FOVY is not None:   # 합의 전엔 MuJoCo 기본 45°
@@ -182,6 +195,11 @@ class Robot:
         self.tow_site_id = find(mujoco.mjtObj.mjOBJ_SITE, Names.TOW_POINT_SITE)
         self.sonar_site_id = find(mujoco.mjtObj.mjOBJ_SITE, Names.SONAR_SITE)
         self.camera_id = find(mujoco.mjtObj.mjOBJ_CAMERA, Names.CAMERA_BOW)
+        self.arm_body_id = find(mujoco.mjtObj.mjOBJ_BODY, Names.CAMERA_ARM_BODY)
+        arm_joint = find(mujoco.mjtObj.mjOBJ_JOINT, Names.CAMERA_ARM_JOINT)
+        self.arm_qpos_adr, self.arm_dof_adr = model.jnt_qposadr[arm_joint], model.jnt_dofadr[arm_joint]
+        self._model = model
+        self.inverted = False
         self.joint_id = free_id
         self.geom_id = self.hull_geom_id
         # 실제로 부딪히는 배 형상 (간격·관통 검사용). A형이면 다리·연결부·뱃머리, 직육면체면 hull 하나
@@ -195,9 +213,9 @@ class Robot:
             self._model = model
             self.reset_winch(model)   # 처음엔 짧게 감긴 상태
 
-        # 물은 무게를 모델에서 읽음 → 누가 모델을 바꿔 config 와 달라지면 흘수 정답값이 조용히 틀림
-        assert abs(model.body_mass[self.body_id] - Hull.MASS) < 1e-9, (
-            f"모델 배 무게 {model.body_mass[self.body_id]} kg ≠ config.Hull.MASS {Hull.MASS} kg")
+        # 물은 무게를 모델에서 읽음(body_subtreemass = 배 + 카메라 팔) → config 와 다르면 흘수 정답값이 조용히 틀림
+        assert abs(model.body_subtreemass[self.body_id] - Hull.MASS) < 1e-9, (
+            f"모델 배 무게 {model.body_subtreemass[self.body_id]} kg ≠ config.Hull.MASS {Hull.MASS} kg")
 
     # ── 구명환 윈치: 짧게 끌고 가다가 줄을 풀어 건네줌 ─────────────────
     def _check_winch(self, model=None):
@@ -256,11 +274,54 @@ class Robot:
         if length >= Winch.PAYOUT_LENGTH:
             self.delivery_state = PAID_OUT
 
+    # ── 상하 뒤바뀜 ───────────────────────────────────────────
+    def reset_inversion(self, model=None):
+        """바로 선 판정으로. 카메라 팔 각도는 qpos 라 mj_resetData 가 되돌린다."""
+        self.inverted = False
+
+    def camera_roll(self, data):
+        """카메라 회전 팔 각도 [rad]. 0 = 원래 자리(위), ±π = 반 바퀴."""
+        return float(data.qpos[self.arm_qpos_adr])
+
+    def update_inversion(self, model, data):
+        """뒤바뀜 판정(사이를 둔 두 기준). add_forces 가 부른다."""
+        up_z = data.xmat[self.body_id][8]   # 몸체 z 축의 세상 z 성분
+        if not self.inverted and up_z < Inversion.ENTER_UP_Z:
+            self.inverted = True
+        elif self.inverted and up_z > Inversion.EXIT_UP_Z:
+            self.inverted = False
+
+    def _drive_camera_arm(self, model, data, acc):
+        """카메라 팔을 목표 각도(바로 0, 뒤집힘 π)로 돌리는 모터 돌림힘. 반작용은 배가 받는다 (운동량 보존)."""
+        angle = self.camera_roll(data)
+        target = np.pi if self.inverted else 0.0
+        error = np.arctan2(np.sin(target - angle), np.cos(target - angle))   # 가까운 쪽으로
+        top_speed = 1.5 * np.pi / Inversion.CAMERA_FLIP_SECONDS
+        desired_rate = np.clip(4.0 * error, -top_speed, top_speed)
+        axis = data.xmat[self.body_id].reshape(3, 3)[:, 0]   # 경첩 축 = 몸체 x (월드)
+        # 팔 무게가 축 둘레로 거는 돌림힘을 미리 상쇄하고, 남은 속도 차이를 맞춘다
+        lever = data.xipos[self.arm_body_id] - data.xpos[self.body_id]
+        gravity = np.cross(lever, CAMERA_MASS * model.opt.gravity) @ axis
+        inertia = CAMERA_MASS * float(np.sum(np.asarray(Sensors.CAMERA_POS_B[1:]) ** 2))
+        torque = 60.0 * inertia * (desired_rate - data.qvel[self.arm_dof_adr]) - gravity
+        torque = float(np.clip(torque, -Inversion.CAMERA_ARM_MAX_TORQUE, Inversion.CAMERA_ARM_MAX_TORQUE))
+        zero = np.zeros(3)
+        acc.add(self.arm_body_id, zero, torque_w=torque * axis)
+        acc.add(self.body_id, zero, torque_w=-torque * axis)
+
+    def nozzle_points_w(self, data):
+        """(왼쪽, 오른쪽) 노즐이 물을 미는 점 [월드]. 뒤집히면 몸체 z 를 뒤집은 자리 (양면 워터젯, 물속 쪽)."""
+        if not self.inverted:
+            return data.site_xpos[[self.thr_l_site_id, self.thr_r_site_id]].copy()
+        rotation = data.xmat[self.body_id].reshape(3, 3)
+        points_b = self._model.site_pos[[self.thr_l_site_id, self.thr_r_site_id]] * (1.0, 1.0, -1.0)
+        return data.xpos[self.body_id] + points_b @ rotation.T
+
     def nozzles_submerged(self, data):
         """(왼쪽, 오른쪽) 노즐이 수면 아래인지. surface_height 가 없으면 항상 (True, True)."""
         if self.surface_height is None:
             return (True, True)
-        pos = data.site_xpos[[self.thr_l_site_id, self.thr_r_site_id]]
+        pos = self.nozzle_points_w(data)
         surface = self.surface_height(pos[:, 0], pos[:, 1], data.time)   # 두 점을 한 번에 (WAVE_HEIGHT_VECTORIZED)
         return tuple(bool(z < s) for z, s in zip(pos[:, 2], surface))
 
@@ -268,13 +329,18 @@ class Robot:
         """스텝마다 힘을 acc(ForceAccumulator)에 더한다. 월드 좌표.
 
         추력은 배 앞쪽(+x_b) 방향 → body_to_world 로 월드 방향으로 돌리고,
-        추진기 점의 월드 위치(site_xpos)에 건다. 점이 무게중심에서 벗어나 있으니 돌림힘은 acc 가 계산.
+        추진기 점의 월드 위치에 건다. 점이 무게중심에서 벗어나 있으니 돌림힘은 acc 가 계산.
+        뒤집히면(update_inversion) 물속 쪽 노즐 자리에서 밀고, 좌우 추력을 바꿔 조향 방향(+ = 세상 왼쪽)을 유지한다.
         """
-        for site_id, thrust, wet in zip((self.thr_l_site_id, self.thr_r_site_id), self.thrusts(),
-                                        self.nozzles_submerged(data)):
+        self.update_inversion(model, data)
+        self._drive_camera_arm(model, data, acc)
+        thrusts = self.thrusts()
+        if self.inverted:
+            thrusts = thrusts[::-1]   # 몸체 왼쪽 노즐이 세상 오른쪽에 있음
+        for point, thrust, wet in zip(self.nozzle_points_w(data), thrusts, self.nozzles_submerged(data)):
             if not wet:
                 continue   # 노즐이 공기 중이면 물을 못 밀어 추력 없음
             force_w = frames.body_to_world(data, self.body_id, (thrust, 0.0, 0.0))
-            acc.add(self.body_id, force_w, point_w=data.site_xpos[site_id].copy())
+            acc.add(self.body_id, force_w, point_w=point)
         if self.winch:
             self._update_winch(model)

@@ -149,10 +149,6 @@ def apply_failure_demo(manager, kind):
         raise ValueError('실패 시연은 전체 시나리오에서만 지원합니다.')
     if kind == 'timeout':
         manager.watchdog.settings = replace(manager.watchdog.settings, approach_timeout=1.)
-    elif kind == 'capsize':
-        address = manager.world.model.jnt_qposadr[manager.robot.joint_id]
-        angle = math.radians(80)
-        manager.world.data.qpos[address + 3:address + 7] = [math.cos(angle / 2), math.sin(angle / 2), 0, 0]
     elif kind == 'nonfinite':
         manager.world.data.qpos[0] = float('nan')
     elif kind == 'warning':
@@ -168,7 +164,7 @@ def apply_failure_demo(manager, kind):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--headless', action='store_true')
-    parser.add_argument('--failure-demo', choices=('timeout', 'capsize', 'nonfinite', 'warning', 'inference'),
+    parser.add_argument('--failure-demo', choices=('timeout', 'nonfinite', 'warning', 'inference'),
                         help='Watchdog 중단 동작을 확인하는 오류 주입 시연')
     parser.add_argument('--approach-only', action='store_true', help='기존 로프 없는 연결 대기 시험')
     parser.add_argument('--no-ring', action='store_true',
