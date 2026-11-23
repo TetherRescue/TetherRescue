@@ -1050,19 +1050,26 @@ def test_wave_surface_visual_does_not_change_forces():
     assert np.allclose(forces(True), forces(False))
 
 
-def test_coast_map_lowers_flat_sea_below_wave_troughs():
-    # 해안 맵: 파도가 있으면 평평한 바다 판 윗면이 가장 낮은 골보다 아래 → 파도 수면을 가리지 않음
+def test_coast_map_draws_one_water_layer():
+    # 해안 맵: 잔잔하면 맵의 바다 판 하나. 파도가 있으면 맵 판은 없고 물이 메시 하나(패치 + 둘레 바다)를 그린다
+    # (두 겹이면 "물 위에 물"처럼 보였다). 갯벌은 가장 낮은 골보다 아래 → 수면을 뚫고 나오지 않음
     from sim.world.coast_map import build_hanagae_world
-    for waves, has_patch in ((CALM, False), (WAVES, True)):
-        world, *_ = build_hanagae_world(waves=waves)
-        model = world.model
-        sea = model.geom('hanagae_water_surface')
-        top = sea.pos[2] + sea.size[2]
-        assert (mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, water.WAVE_SURFACE_GEOM) >= 0) == has_patch
-        if has_patch:
-            assert top < WaterParams.SURFACE_Z - water.wave_amplitude(waves)
-        else:
-            assert top == pytest.approx(WaterParams.SURFACE_Z + .05)
+    def water_geoms(model):
+        names = (model.geom(i).name for i in range(model.ngeom))
+        return [name for name in names if name.startswith(water.WAVE_SURFACE_GEOM)]
+
+    calm, *_ = build_hanagae_world(waves=CALM)
+    sea = calm.model.geom('hanagae_water_surface')
+    assert sea.pos[2] + sea.size[2] == pytest.approx(WaterParams.SURFACE_Z + .05)
+    assert water_geoms(calm.model) == []
+
+    wavy, *_ = build_hanagae_world(waves=WAVES)
+    model = wavy.model
+    assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, 'hanagae_water_surface') == -1
+    # 패치와 둘레 바다가 한 메시 → 한 번의 업로드로 함께 바뀐다 (따로면 화면 반영 시점이 어긋나 테두리가 깜빡였다)
+    assert water_geoms(model) == [water.WAVE_SURFACE_GEOM]
+    flat = model.geom('hanagae_tidal_flat')
+    assert flat.pos[2] + flat.size[2] < WaterParams.SURFACE_Z - water.wave_amplitude(WAVES)
 
 
 def _triangle_areas(verts, faces):
@@ -1085,4 +1092,23 @@ def test_sea_ring_fills_sea_around_patch_without_overlap(center):
     assert areas.sum() == pytest.approx(outer)
     assert corners[0, 0] <= bounds[0] and corners[1, 0] >= bounds[1]           # 바다 범위를 모두 덮는다
     assert corners[0, 1] <= bounds[2] and corners[2, 1] >= bounds[3]
+
+
+def test_sea_ring_follows_wave_patch():
+    # 배가 움직이면 패치와 바깥 모서리 꼭짓점이 같은 메시 안에서 함께 바뀐다
+    from sim.world.coast_map import SEA_BOUNDS, build_hanagae_world
+    world, robot, water_part, _ = build_hanagae_world(waves=WAVES)
+    model, data = world.model, world.data
+    n2 = len(water.wave_surface_grid()) ** 2
+    for boat_x in (-80.0, -20.0):
+        data.qpos[robot.qpos_adr] = boat_x
+        mujoco.mj_forward(model, data)
+        mesh_id = water_part.update_surface_visual(model, data)
+        verts, normals = _surface_mesh_w(model, data, mesh_id)
+        assert len(verts) == n2 + water.SEA_RING_CORNERS
+        center = verts[:n2, :2].mean(axis=0)
+        assert center[0] == pytest.approx(boat_x, abs=water.WAVE_SURFACE_STEP / 2 + 1e-4)
+        assert np.allclose(verts[n2:, :2], water.sea_ring_corners(SEA_BOUNDS, np.round(center / water.WAVE_SURFACE_STEP) * water.WAVE_SURFACE_STEP), atol=1e-3)
+        assert np.allclose(verts[n2:, 2], WaterParams.SURFACE_Z, atol=1e-5)
+        assert np.allclose(normals[n2:], [0.0, 0.0, 1.0], atol=1e-5)
 
