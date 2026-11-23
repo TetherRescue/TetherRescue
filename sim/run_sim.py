@@ -94,9 +94,9 @@ def run_viewer(sortie):
                 budget = max(0.0, budget - 1 / 60)
                 state = sortie.readings()
                 _draw_gps(viewer.user_scn, state)
-                wave_hfield = sortie.water.update_surface_visual(world.model, world.data)
-            if wave_hfield is not None:   # 파도 수면 높이맵을 화면에 올린다 (lock 밖)
-                viewer.update_hfield(wave_hfield)
+                wave_mesh = sortie.water.update_surface_visual(world.model, world.data)
+            if wave_mesh is not None:   # 파도 수면 메시를 화면에 올린다 (lock 밖)
+                viewer.update_mesh(wave_mesh)
             gps = '—' if state['gps_xy'] is None else f"{state['gps_xy'][0]:.1f}, {state['gps_xy'][1]:.1f}"
             dist = '—' if state['distance_to_gps'] is None else f"{state['distance_to_gps']:.1f} m"
             viewer.set_texts([(mujoco.mjtFontScale.mjFONTSCALE_150, mujoco.mjtGridPos.mjGRID_TOPLEFT,

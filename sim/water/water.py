@@ -41,6 +41,23 @@ def wave_height(x, y, t, waves=config.WaterParams.WAVES_DEFAULT):
     return float(z) if z.ndim == 0 else z
 
 
+def wave_slope(x, y, t, waves=config.WaterParams.WAVES_DEFAULT):
+    """수면 기울기 (∂z/∂x, ∂z/∂y) [m/m]. wave_height 를 x, y 로 미분한 값 (화면 수면의 법선 계산용)."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    shape = np.broadcast(x, y).shape
+    dz_dx, dz_dy = np.zeros(shape), np.zeros(shape)
+    g = config.Physics.GRAVITY
+    for amp, length, direction, phase in waves:
+        k = 2.0 * math.pi / length
+        omega = math.sqrt(g * k)
+        along = x * math.cos(direction) + y * math.sin(direction)
+        s = -amp * k * np.sin(k * along - omega * t + phase)   # ∂z/∂(진행 방향 거리)
+        dz_dx = dz_dx + s * math.cos(direction)
+        dz_dy = dz_dy + s * math.sin(direction)
+    return dz_dx, dz_dy
+
+
 # ─────────────────────────────────────────────────────────────
 # 회전 감쇠: 감쇠비 → 계수
 # ─────────────────────────────────────────────────────────────
@@ -513,19 +530,28 @@ def added_mass_force_w(data, body_id, accel_w, added_mass_b):
 
 
 # ─────────────────────────────────────────────────────────────
-# 파도 수면 표시 (화면 전용): 배를 따라다니는 높이맵(hfield) 패치
+# 파도 수면 표시 (화면 전용): 배를 따라다니는 격자 메시 패치
 # ─────────────────────────────────────────────────────────────
 # 파도는 부력·노즐 판정에는 들어가지만, 예전 수면 표시는 평평한 판 하나라 "배만 출렁이고 물은 가만히" 보였다
-# (2026-11-23 팀원 피드백). 파도가 있으면 격자 높이맵을 깔고, 화면 프레임마다 wave_height 로 높이를 채운다.
+# (2026-11-23 팀원 피드백). 파도가 있으면 격자 메시를 깔고, 화면 프레임마다 wave_height 로 꼭짓점 높이를 채운다.
 #   - 물리에는 영향 없음: 접촉 끔(contype 0), worldbody 고정 geom 이라 질량도 없다.
-#   - 바다 전체(수백 m)를 촘촘히 깔면 프레임마다 계산이 무거워서 배 주변 50 m 만 깔고 배를 따라 옮긴다.
+#   - 바다 전체(수백 m)를 촘촘히 깔면 프레임마다 계산이 무거워서 배 주변 50 m 만 깔고 배를 따라 옮긴다
+#     (2026-11-23 측정: 50 m 패치 14 ms/프레임, 바다 전체 240 ms/프레임).
 #     옮길 때 격자 간격 단위로 끊어 옮겨야 물결이 미끄러져 보이지 않는다.
 #   - 가장자리 FADE 구간에서 파도를 평균 수면으로 줄여, 바깥 평평한 바다와 이어지게 한다.
-WAVE_SURFACE_GEOM = "water_wave_surface"    # 파도 수면 geom 이름 (hfield 도 같은 이름)
+#   - 넓은 바다(sea_bounds)를 줄 때: 바깥 평평한 바다를 패치 둘레의 띠(액자 틀)로 같은 메시에 넣어 함께 옮긴다.
+#     바다 판 한 장 위에 패치를 겹쳐 그리면 반투명 두 겹이 비쳐 "물 위에 물"처럼 보였다 (2026-11-23 실행 확인).
+#   - 높이맵(hfield) 대신 메시: 높이맵은 가장자리 옆면 벽을 항상 그려서, 반투명 물 너머로 패치 테두리가 선으로 보였다.
+#     메시는 윗면만 그린다. 꼭짓점은 월드 좌표로 계산한 뒤 메시 좌표로 바꿔 넣는다
+#     (MuJoCo 가 컴파일 때 메시를 무게중심 기준으로 옮기고 돌리므로, bind 에서 그 변환을 한 번 읽어 둔다).
+WAVE_SURFACE_GEOM = "water_wave_surface"    # 파도 수면 geom 이름 (메시도 같은 이름)
 WAVE_SURFACE_HALF = 25.0                    # 패치 반폭 [m] → 50 m × 50 m
-WAVE_SURFACE_STEP = 0.25                    # 격자 간격 [m]. 가장 짧은 기본 파장 2 m 를 8칸으로
+WAVE_SURFACE_STEP = 0.5                     # 격자 간격 [m]. 가장 짧은 기본 파장 2 m 를 4칸으로. 0.25 m 는 메시
+                                            # 갱신·업로드·그리기가 프레임당 약 26 ms 라 느렸다 (2026-11-23 측정).
+                                            # 성긴 격자로도 물결 음영이 살도록 법선은 파도 식을 미분해 구한다
 WAVE_SURFACE_FADE = 5.0                     # 가장자리에서 파도가 0 으로 줄어드는 폭 [m]
-WAVE_SURFACE_BASE = 0.05                    # 높이맵 밑판 두께 [m] (MuJoCo hfield 필수값, 화면에만 영향)
+WAVE_SURFACE_RGBA = (.06, .32, .45, .6)     # sea_rgba 를 주지 않을 때 패치 색
+SEA_RING_CORNERS = 4                        # 바깥 바다 모서리 꼭짓점 수 (남서, 남동, 북동, 북서). 패치 꼭짓점 뒤에 붙는다
 
 
 def wave_amplitude(waves):
@@ -539,14 +565,108 @@ def wave_surface_grid():
     return np.linspace(-WAVE_SURFACE_HALF, WAVE_SURFACE_HALF, n)
 
 
-def wave_surface_heights(center_xy, t, waves):
-    """패치 격자의 수면 높이 (nrow=y, ncol=x) [m]. 가장자리 FADE 구간은 평균 수면 쪽으로 줄인다."""
+def _wave_surface_fade():
+    """패치 격자의 줄임 비율 (가운데 1 → 가장자리 0) 과 그 기울기 (∂/∂x, ∂/∂y). 행 = y, 열 = x."""
     axis = wave_surface_grid()
-    gx, gy = np.meshgrid(center_xy[0] + axis, center_xy[1] + axis)   # 행 = y, 열 = x (MuJoCo hfield 순서)
-    edge = WAVE_SURFACE_HALF - np.maximum(np.abs(axis)[None, :], np.abs(axis)[:, None])
+    ax, ay = np.abs(axis)[None, :], np.abs(axis)[:, None]
+    edge = WAVE_SURFACE_HALF - np.maximum(ax, ay)
     fade = np.clip(edge / WAVE_SURFACE_FADE, 0.0, 1.0)
+    ramp = (edge > 0) & (edge < WAVE_SURFACE_FADE)          # 줄어드는 띠 안에서만 기울기가 있다
+    x_side = ax >= ay                                        # 가장 가까운 가장자리가 동·서쪽
+    dfade_dx = np.where(ramp & x_side, -np.sign(axis)[None, :] / WAVE_SURFACE_FADE, 0.0)
+    dfade_dy = np.where(ramp & ~x_side, -np.sign(axis)[:, None] / WAVE_SURFACE_FADE, 0.0)
+    return fade, dfade_dx, dfade_dy
+
+
+def wave_surface_heights(center_xy, t, waves):
+    """패치 격자의 수면 높이 (행 = y, 열 = x) [m]. 가장자리 FADE 구간은 평균 수면 쪽으로 줄인다."""
+    axis = wave_surface_grid()
+    gx, gy = np.meshgrid(center_xy[0] + axis, center_xy[1] + axis)   # 행 = y, 열 = x
+    fade, _, _ = _wave_surface_fade()
     surface = config.WaterParams.SURFACE_Z
     return surface + fade * (wave_height(gx, gy, t, waves) - surface)
+
+
+def _sea_ring_sides():
+    """바깥 바다 띠를 이루는 네 변: (패치 테두리 꼭짓점 번호 목록, 시작 쪽 모서리, 끝 쪽 모서리).
+
+    모서리 번호는 패치 꼭짓점(n²) 뒤의 0 남서, 1 남동, 2 북동, 3 북서. 테두리는 서→동, 남→북 순서.
+    """
+    n = len(wave_surface_grid())
+    cols, rows = np.arange(n), np.arange(n)
+    return ((cols, 0, 1),                      # 남쪽 변 (행 0)
+            (rows * n + n - 1, 1, 2),          # 동쪽 변 (열 n−1)
+            ((n - 1) * n + cols, 3, 2),        # 북쪽 변 (행 n−1)
+            (rows * n, 0, 3))                  # 서쪽 변 (열 0)
+
+
+def wave_surface_faces(sea_ring=False):
+    """격자 메시 삼각형 (꼭짓점 번호 3개씩). 꼭짓점 번호 = 행(y) × 한 변 개수 + 열(x). 위에서 보면 반시계 → 법선이 위.
+
+    sea_ring=True: 패치 둘레의 평평한 바다도 같은 메시에 넣는다. 변마다 테두리 꼭짓점을 바다 모서리 두 개에
+    부채꼴로 잇는다 (앞 절반은 시작 모서리, 뒤 절반은 끝 모서리, 가운데 한 장이 두 모서리를 잇는다).
+    테두리 꼭짓점을 같이 쓰므로 패치와 바깥 바다 사이에 틈·겹침이 없다.
+    """
+    n = len(wave_surface_grid())
+    a = (np.arange(n - 1)[:, None] * n + np.arange(n - 1)[None, :]).ravel()   # 칸의 남서 꼭짓점
+    faces = [np.stack([a, a + 1, a + n, a + 1, a + n + 1, a + n], axis=1).reshape(-1, 3)]
+    if sea_ring:
+        corner = n * n
+        mid = (n - 1) // 2
+        # 감김 방향(위에서 반시계)은 패치가 바다 한가운데 있는 모양으로 한 번 정해 둔다
+        probe = np.zeros((n * n + SEA_RING_CORNERS, 2))
+        axis = wave_surface_grid()
+        probe[:n * n] = np.stack(np.meshgrid(axis, axis), axis=-1).reshape(-1, 2)
+        probe[corner:] = [(-100, -100), (100, -100), (100, 100), (-100, 100)]
+        for edge, start, end in _sea_ring_sides():
+            tris = [(corner + start, edge[i], edge[i + 1]) for i in range(mid)]
+            tris += [(corner + end, edge[i], edge[i + 1]) for i in range(mid, n - 1)]
+            tris.append((corner + start, edge[mid], corner + end))
+            tris = np.array(tris)
+            p = probe[tris]
+            ccw = np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0]) > 0
+            tris[~ccw] = tris[~ccw][:, [0, 2, 1]]
+            faces.append(tris)
+    return np.concatenate(faces)
+
+
+def sea_ring_corners(sea_bounds, center_xy):
+    """바깥 바다 모서리 4개 (남서, 남동, 북동, 북서) 의 (x, y).
+
+    sea_bounds = (x0, x1, y0, y1). 패치가 바다 밖으로 나가면 그쪽 모서리를 패치 테두리까지 넓힌다
+    → 그 변의 띠는 폭 0 이 되어 패치 위로 뒤집혀 겹치지 않는다 (맵의 육지가 패치를 가린다).
+    """
+    x0, x1, y0, y1 = sea_bounds
+    x0 = min(x0, center_xy[0] - WAVE_SURFACE_HALF)
+    x1 = max(x1, center_xy[0] + WAVE_SURFACE_HALF)
+    y0 = min(y0, center_xy[1] - WAVE_SURFACE_HALF)
+    y1 = max(y1, center_xy[1] + WAVE_SURFACE_HALF)
+    return np.array([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], dtype=float)
+
+
+def wave_surface_mesh(center_xy, t, waves, sea_bounds=None):
+    """패치 격자 메시의 월드 꼭짓점 (N, 3) 과 꼭짓점 법선 (N, 3).
+
+    높이 = s + f·(h − s) 이므로 기울기 = f·∇h + (h − s)·∇f (s: 평균 수면, f: 가장자리 줄임 비율).
+    sea_bounds 를 주면 뒤에 바깥 바다 모서리 4개 (평균 수면 높이, 법선 위) 를 붙인다.
+    """
+    axis = wave_surface_grid()
+    gx, gy = np.meshgrid(center_xy[0] + axis, center_xy[1] + axis)
+    fade, dfade_dx, dfade_dy = _wave_surface_fade()
+    surface = config.WaterParams.SURFACE_Z
+    rise = wave_height(gx, gy, t, waves) - surface
+    heights = surface + fade * rise
+    dh_dx, dh_dy = wave_slope(gx, gy, t, waves)
+    dz_dx = fade * dh_dx + rise * dfade_dx
+    dz_dy = fade * dh_dy + rise * dfade_dy
+    normals = np.stack([-dz_dx, -dz_dy, np.ones_like(heights)], axis=-1).reshape(-1, 3)
+    normals /= np.linalg.norm(normals, axis=1, keepdims=True)
+    verts = np.stack([gx, gy, heights], axis=-1).reshape(-1, 3)
+    if sea_bounds is not None:
+        corners = sea_ring_corners(sea_bounds, center_xy)
+        verts = np.vstack([verts, np.column_stack([corners, np.full(len(corners), surface)])])
+        normals = np.vstack([normals, np.tile([0.0, 0.0, 1.0], (len(corners), 1))])
+    return verts, normals
 
 
 # ─────────────────────────────────────────────────────────────
@@ -557,15 +677,20 @@ class Water:
     REQUIRES = config.WaterParams.REQUIRES
 
     def __init__(self, waves=config.WaterParams.WAVES_DEFAULT, *, floating_bodies=(), surface_visual=False, include_boat=True,
-                 wave_visual=None):
+                 wave_visual=None, sea_bounds=None, sea_rgba=None):
         """surface_visual: 수면을 화면에 그린다. 파도가 없으면 평평한 판, 파도가 있으면 출렁이는 패치.
         wave_visual: 파도 패치만 따로 켜고 끈다. None 이면 surface_visual 을 따른다.
           해안 맵처럼 넓은 평평한 바다를 직접 그리는 곳은 surface_visual=False, wave_visual=True 로 쓴다.
-        파도 패치는 화면 루프에서 update_surface_visual() 을 불러야 움직인다.
+        sea_bounds: (x0, x1, y0, y1). 주면 파도 패치 둘레의 평평한 바다도 물이 그린다 (같은 메시, 패치와 함께 이동).
+          이때 맵은 파도가 있는 동안 자기 바다 판을 그리지 않는다 → 수면이 한 겹.
+        sea_rgba: 패치와 둘레 판의 색. None 이면 WAVE_SURFACE_RGBA.
+        파도 패치는 화면 루프에서 update_surface_visual() 을 불러야 움직인다. 화면 전용이라 힘에는 영향 없음.
         """
         self.waves = waves
         self.surface_visual = surface_visual
         self.wave_visual = bool(waves) and (surface_visual if wave_visual is None else wave_visual)
+        self.sea_bounds = None if sea_bounds is None else tuple(float(v) for v in sea_bounds)
+        self.sea_rgba = WAVE_SURFACE_RGBA if sea_rgba is None else tuple(sea_rgba)
         self.include_boat = include_boat
         # 사람·구명환의 실험 부력은 명시적으로 선택한다. 선체 부력은 기본 적용.
         self.floating_bodies = tuple(floating_bodies)
@@ -576,19 +701,20 @@ class Water:
         return wave_height(x, y, t, self.waves)
 
     def build(self, spec):
-        """선택한 수면 표시는 접촉·질량이 없다. 파도가 있으면 높이맵 패치, 없으면 평면."""
+        """선택한 수면 표시는 접촉·질량이 없다. 파도가 있으면 격자 메시 패치, 없으면 평면."""
         import mujoco
         group = 0 if config.Groups.VISUAL is None else config.Groups.VISUAL
         if self.wave_visual:
-            # 높이 = geom 높이 + 값(0~1) × top. 가장 낮은 골(평균 − 진폭합)을 0, 가장 높은 마루를 1 로 둔다
-            amp = max(wave_amplitude(self.waves), 1e-3)
-            n = len(wave_surface_grid())
-            spec.add_hfield(name=WAVE_SURFACE_GEOM, nrow=n, ncol=n, userdata=[0.5] * (n * n),
-                            size=[WAVE_SURFACE_HALF, WAVE_SURFACE_HALF, 2 * amp, WAVE_SURFACE_BASE])
-            spec.worldbody.add_geom(name=WAVE_SURFACE_GEOM, type=mujoco.mjtGeom.mjGEOM_HFIELD,
-                                    hfieldname=WAVE_SURFACE_GEOM,
-                                    pos=[0, 0, config.WaterParams.SURFACE_Z - amp],
-                                    rgba=[.06, .32, .45, .6], contype=0, conaffinity=0, group=group)
+            # 처음 모양은 t = 0 파도 (완전히 평평하면 메시 관성 계산이 퇴화한다). 윗면만 있는 열린 면이라 shell 관성
+            # sea_bounds 가 있으면 바깥 평평한 바다도 같은 메시에 넣는다. 판을 따로 두면 메시 업로드(즉시)와
+            # 판 위치 반영(viewer.sync)이 다른 순간이라, 그 사이 그려진 프레임에서 뒤쪽 테두리에 틈이 깜빡였다
+            verts, _ = wave_surface_mesh((0.0, 0.0), 0.0, self.waves, self.sea_bounds)
+            spec.add_mesh(name=WAVE_SURFACE_GEOM, uservert=verts.ravel().tolist(),
+                          userface=wave_surface_faces(self.sea_bounds is not None).ravel().tolist(),
+                          inertia=mujoco.mjtMeshInertia.mjMESH_INERTIA_SHELL)
+            spec.worldbody.add_geom(name=WAVE_SURFACE_GEOM, type=mujoco.mjtGeom.mjGEOM_MESH,
+                                    meshname=WAVE_SURFACE_GEOM,
+                                    rgba=list(self.sea_rgba), contype=0, conaffinity=0, group=group)
         if self.surface_visual and not self.wave_visual:
             spec.worldbody.add_geom(name=config.Names.WATER_SURFACE_GEOM,
                                     type=mujoco.mjtGeom.mjGEOM_PLANE,
@@ -601,26 +727,24 @@ class Water:
         """파도 수면 패치를 지금 시각(data.time)의 파도 높이로 채운다. 화면 프레임마다 부른다.
 
         center_xy: 패치 가운데 (x, y). None 이면 배 위치 (배가 없으면 원점). 격자 간격 단위로 맞춘다.
-        viewer: mujoco.viewer 핸들을 주면 바뀐 높이맵을 화면에 올린다 (viewer.update_hfield).
-          높이 값은 viewer.lock() 안에서 바꾸고, 이 함수는 lock 밖에서 viewer 와 함께 부르는 것을 권장.
-        돌려주는 값: 높이맵 번호 (화면에 올릴 때 viewer.update_hfield 에 넘김). 파도 패치가 없으면 None.
+        viewer: mujoco.viewer 핸들을 주면 바뀐 메시를 화면에 올린다 (viewer.update_mesh).
+          꼭짓점은 viewer.lock() 안에서 바꾸고, 화면 올리기는 lock 밖에서 하는 것을 권장.
+        돌려주는 값: 메시 번호 (화면에 올릴 때 viewer.update_mesh 에 넘김). 파도 패치가 없으면 None.
         """
-        if self._wave_hfield is None:
+        if self._wave_mesh is None:
             return None
         if center_xy is None:
             center_xy = (0.0, 0.0) if self.body_id is None else data.xpos[self.body_id][:2]
         center = np.round(np.asarray(center_xy, dtype=float) / WAVE_SURFACE_STEP) * WAVE_SURFACE_STEP
-        hfield_id, geom_id = self._wave_hfield
-        heights = wave_surface_heights(center, data.time, self.waves)
-        low = model.geom_pos[geom_id][2]
-        top = model.hfield_size[hfield_id][2]
-        adr, count = model.hfield_adr[hfield_id], model.hfield_nrow[hfield_id] * model.hfield_ncol[hfield_id]
-        model.hfield_data[adr:adr + count] = np.clip((heights - low) / top, 0.0, 1.0).ravel()
-        model.geom_pos[geom_id][:2] = center
-        data.geom_xpos[geom_id][:2] = center     # 다음 mj_forward 전에도 화면에 바로 반영
+        mesh_id, vert_adr, normal_adr, rot, pos = self._wave_mesh
+        verts_w, normals_w = wave_surface_mesh(center, data.time, self.waves, self.sea_bounds)
+        count = len(verts_w)
+        # 월드 → 메시 좌표: v_mesh = Rᵀ (v_w − p). 행 벡터로 쓰면 (v_w − p) @ R
+        model.mesh_vert[vert_adr:vert_adr + count] = (verts_w - pos) @ rot
+        model.mesh_normal[normal_adr:normal_adr + count] = normals_w @ rot
         if viewer is not None:
-            viewer.update_hfield(hfield_id)
-        return int(hfield_id)
+            viewer.update_mesh(mesh_id)
+        return int(mesh_id)
 
     def bind(self, model):
         """선체 복셀과 명시한 고정 연결 몸체의 합집합 복셀을 준비한다."""
@@ -628,11 +752,22 @@ class Water:
         import mujoco
 
         self.targets = []
-        # 파도 수면 패치 (hfield 번호, geom 번호). 없으면 None
-        self._wave_hfield = None
+        # 파도 수면 패치: (메시 번호, 꼭짓점 시작 주소, 법선 시작 주소, 메시→월드 회전 R, 메시 원점 p). 없으면 None
+        # MuJoCo 는 컴파일 때 메시를 옮기고 돌린다 → 월드 꼭짓점 = R · v_mesh + p (worldbody 고정 geom 이라 상수)
+        self._wave_mesh = None
         if self.wave_visual:
-            self._wave_hfield = (mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_HFIELD, WAVE_SURFACE_GEOM),
-                                 mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, WAVE_SURFACE_GEOM))
+            mesh_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_MESH, WAVE_SURFACE_GEOM)
+            geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, WAVE_SURFACE_GEOM)
+            assert mesh_id >= 0 and geom_id >= 0, "파도 수면 메시를 찾지 못함"
+            count = len(wave_surface_grid()) ** 2 + (SEA_RING_CORNERS if self.sea_bounds is not None else 0)
+            # 꼭짓점 i 의 법선 = 법선 i 여야 꼭짓점·법선을 같은 순서로 덮어쓸 수 있다
+            assert model.mesh_vertnum[mesh_id] == count and model.mesh_normalnum[mesh_id] == count
+            face = slice(model.mesh_faceadr[mesh_id], model.mesh_faceadr[mesh_id] + model.mesh_facenum[mesh_id])
+            assert np.array_equal(model.mesh_facenormal[face], model.mesh_face[face])
+            rot = np.zeros(9)
+            mujoco.mju_quat2Mat(rot, model.geom_quat[geom_id])
+            self._wave_mesh = (mesh_id, model.mesh_vertadr[mesh_id], model.mesh_normaladr[mesh_id],
+                               rot.reshape(3, 3), model.geom_pos[geom_id].copy())
         # 부가질량 (선체만). 꺼져 있으면 None. 켜져 있으면 bind 때 축별 부가질량을 한 번 계산
         self.added_mass_b = None
         self._prev_vel = None   # (시각, 월드 속도): 가속도 = 속도 차이 ÷ 시간 간격 을 구하려고 기억
