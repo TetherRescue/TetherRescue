@@ -2,9 +2,9 @@
 [--speed 2] [--headless]
 
 view_wolmido와 같은 구조 흐름(동경 Launcher·LaunchMission)에 날씨만 더한다 (브랜치 try/weather, 가영 2026-11-20).
-  clear  맑음: 잔잔한 물, 밝은 하늘
-  rain   비: 잔잔한 물, 굵은 비, 어두운 하늘, 가시거리 70 m
-  fog    안개: 잔잔한 물, 가시거리 25 m
+  clear  맑음: 밝은 하늘
+  rain   비: 굵은 비, 어두운 하늘, 가시거리 70 m (세 날씨 모두 기본 파도의 절반 높이)
+  fog    안개: 가시거리 25 m
 물때(--tide)는 날씨와 따로 고른다. 사람은 구명환을 잡기 전까지 물속에 선 자세로 발버둥 친다 (--calm-person 으로 끔). 기존 view_wolmido·config는 바꾸지 않는다.
 """
 

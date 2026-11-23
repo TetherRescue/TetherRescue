@@ -1,7 +1,7 @@
 """[시험용] 월미도 날씨 환경 3개: 맑음 · 비 · 안개 (가영, 2026-11-20, 브랜치 try/weather).
 
 기존 파일(config.py·view_wolmido.py)은 바꾸지 않고 이 파일 안에 설정을 둔다. 확정되면 config.Wolmido로 옮긴다.
-비·안개·하늘·조명은 화면 표시만 바꾼다. 세 날씨 모두 잔잔한 물(WaterParams.WAVES_CALM)이다.
+비·안개·하늘·조명은 화면 표시만 바꾼다. 세 날씨 모두 같은 파도(미현 님 기본 파도의 절반 높이, WAVES_WEATHER)다.
 2026-11-23 가영: 폭풍(큰 파도)은 뺐다. 화면에서 비와 차이가 잘 안 보여서, 눈에 확 보이는 날씨만 남긴다.
 바람 힘은 넣지 않는다: config.Owner.WIND = 물 담당(미현).
 """
@@ -12,19 +12,26 @@ import numpy as np
 
 from sim import config
 
+# 날씨 파도 (2026-11-23 가영): 미현 님 기본 파도(WaterParams.WAVES_DEFAULT, 진폭 합 0.17 m) 모양 그대로, 높이만 WAVE_SCALE 배.
+#   그대로(1.0)는 동경 님 접근·견인 제어가 파도 속에서 도착 판정을 못 맞춰 STAGE_TIMEOUT (오늘 확인한 선미 정렬 문제).
+#   동경 님 쪽이 고쳐지면 1.0으로 올릴 것.
+WAVE_SCALE = 0.5
+WAVES_WEATHER = tuple((amp * WAVE_SCALE, length, heading, phase)
+                      for amp, length, heading, phase in config.WaterParams.WAVES_DEFAULT)
+
 # 날씨 환경 3개. 같은 맵·같은 사람 위치에서 날씨만 다르다.
 #   waves: 파도 성분 튜플. rain: 화면 빗줄기 수 (0 = 비 없음), rain_speed: 떨어지는 속도 [m/s]
 #   visibility: 안개 가시거리 [m] (None = 안개 없음). 이 거리에서 물체가 안개 색에 완전히 덮인다
 #   light: 조명 밝기 배율 (맑음 1). sky: 하늘·안개 색 (None = 맵 기본 하늘). water_rgba: 파도 수면 색
 WEATHERS = {
-    # 1. 맑음: 잔잔한 물, 밝은 하늘
-    "clear": dict(waves=config.WaterParams.WAVES_CALM, rain=0, rain_speed=0.0, visibility=None, light=1.0,
+    # 1. 맑음: 밝은 하늘
+    "clear": dict(waves=WAVES_WEATHER, rain=0, rain_speed=0.0, visibility=None, light=1.0,
                   sky=None, water_rgba=(.06, .32, .45, .6)),
-    # 2. 비: 잔잔한 물, 굵은 비, 어두운 하늘, 빗속 가시거리 약 70 m
-    "rain": dict(waves=config.WaterParams.WAVES_CALM, rain=900, rain_speed=9.0, visibility=70.0, light=.45,
+    # 2. 비: 굵은 비, 어두운 하늘, 빗속 가시거리 약 70 m
+    "rain": dict(waves=WAVES_WEATHER, rain=900, rain_speed=9.0, visibility=70.0, light=.45,
                   sky=(.36, .39, .42), water_rgba=(.13, .22, .25, .75)),
-    # 3. 안개: 잔잔한 물, 짙은 안개 (가시거리 25 m. 출발점에서 사람까지 약 36 m라 처음엔 사람이 안 보인다)
-    "fog": dict(waves=config.WaterParams.WAVES_CALM, rain=0, rain_speed=0.0, visibility=25.0, light=.75,
+    # 3. 안개: 짙은 안개 (가시거리 25 m. 출발점에서 사람까지 약 36 m라 처음엔 사람이 안 보인다)
+    "fog": dict(waves=WAVES_WEATHER, rain=0, rain_speed=0.0, visibility=25.0, light=.75,
                 sky=(.78, .8, .82), water_rgba=(.06, .32, .45, .6)),
 }
 
