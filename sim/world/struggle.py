@@ -26,7 +26,8 @@ from sim import config
 
 class Struggle:
     REQUIRES = {}
-    FREQUENCY = 1.5         # 발버둥 빠르기 [Hz]. .9 → 1.5 (2026-11-23: 다급해 보이게, 팔 한 번 내리치는 주기 약 0.7초)
+    FREQUENCY = 2.0         # 발버둥 빠르기 [Hz]. .9 → 1.5 → 2.0 (2026-11-23: 다급해 보이게, 팔 한 번 내리치는 주기 약 0.5초)
+    LEG_FREQUENCY = 1.1     # 다리 페달 빠르기 [Hz]. 팔과 따로, 더 느리게 (다리는 무겁다, 시험용 가정값)
     # 2026-11-23 가영: 걸어 나오는 것처럼 보여서 더 허우적대게 — 더 낮게 잠기고, 불규칙하게 크게 출렁이고, 더 흔들린다.
     HEAVE_FORCE = 160.0     # 위아래 출렁임 힘 진폭 [N]. 110 → 160: 머리가 수면에 잠겼다 나왔다 한다 (시험용 가정값)
     SWAY = .22              # 좌우·앞뒤로 흔들리는 기울기 [rad]. .12 → .22 (시험용 가정값)
@@ -54,6 +55,13 @@ class Struggle:
     SINK_LIFT = .1          # 가라앉는 동안 남는 선헤엄 받침 비율
     SINK_PUSH = 60.0       # 가라앉는 동안 아래로 잠기는 힘 [N] (힘이 빠져 물에 빨려 들어가는 것을 흉내, 시험용 가정값)
     GASP_BOOST = 1.5        # 올라오며 헐떡일 때 동작 크기 배율
+    # 구명환을 잡은 뒤 (2026-11-23 가영: 잡은 뒤 물에 잠기지 않게): 사람이 구명환에 매달려 머리를 물 밖에 유지하는 힘.
+    #   머리 점에 위로만 건다 (뒤로 누워도 머리 쪽이 들림). 견인이 끝날 때까지 유지. 시험용 가정값.
+    HELD_HEAD_Z = .14       # 잡은 뒤 유지할 머리 중심 높이: 수면 위 [m]
+    HELD_STIFFNESS = 1200.0 # [N/m]
+    HELD_DAMPING = 250.0    # [N/(m/s)]
+    HELD_MAX = 450.0        # 위로 받치는 힘 상한 [N]
+    LEAN = math.radians(20)  # 발버둥 중 몸을 앞으로 기울이는 각 (헤엄치려는 자세, 시험용 가정값)
     LOOK = .45              # 도움을 찾아 좌우로 두리번거리는 몸 돌림 [rad]
     CALM_DISTANCE = (.6, 1.8)   # 구명환-손 거리가 이 범위 [m] 안으로 들어오면 발버둥이 1 → 0으로 잦아든다
     # 팔 쉬는 자세 (선 자세 몸 좌표 각도 [rad]): 옆으로 뻗어 수면 근처에서 약간 앞으로. 손 잡기 점이 여기 손끝에 온다.
@@ -146,7 +154,8 @@ class Struggle:
 
     def target_rotation(self, lay, sway=(0., 0.), look=0.):
         """목표 자세 회전 행렬 (열 = 몸 x·y·z 축, 월드 좌표). lay=0 선 자세(얼굴 facing), lay=1 뒤로 누움(얼굴 위)."""
-        theta = lay * math.pi / 2
+        # 발버둥 중엔 앞으로 LEAN만큼 기울인다 (꼿꼿이 서면 바닥을 딛고 선 것처럼 보임, 2026-11-23). 잡은 뒤엔 뒤로 눕는다.
+        theta = lay * math.pi / 2 - (1 - lay) * self.LEAN
         front = np.array([math.cos(self.facing), math.sin(self.facing), 0.])
         up = np.array([0., 0., 1.])
         x = math.cos(theta) * up - math.sin(theta) * front     # 머리 쪽: 위 → 뒤로 넘어감
@@ -163,6 +172,9 @@ class Struggle:
 
         k = self.intensity(data)
         lay, u = self.pose_schedule(data)
+        held = self.grasp.is_held(data)
+        if held:
+            self._hold_head_up(model, data, acc)
         if k <= 0 and u <= 0:
             return
         w = 2 * math.pi * self.FREQUENCY
@@ -212,6 +224,23 @@ class Struggle:
                 pose *= self.POSE_MAX / size
             torque = u * pose
         acc.add(body, force, torque_w=torque)
+
+    def _hold_head_up(self, model, data, acc):
+        """구명환을 잡은 뒤: 머리 중심이 HELD_HEAD_Z 아래로 내려가면 머리 점을 위로 받친다 (위로만, 상한 HELD_MAX)."""
+        import mujoco
+
+        body = self.human.body_id
+        rotation = data.xmat[body].reshape(3, 3)
+        head = data.xpos[body] + rotation @ (np.asarray(config.Human.HEAD_POS_B) * self.human.length_scale)
+        velocity = np.zeros(6)
+        mujoco.mj_objectVelocity(model, data, mujoco.mjtObj.mjOBJ_BODY, body, velocity, 0)
+        spin, linear = velocity[:3], velocity[3:]
+        head_vz = linear[2] + np.cross(spin, head - data.xipos[body])[2]
+        up = (self.HELD_STIFFNESS * (config.WaterParams.SURFACE_Z + self.HELD_HEAD_Z - head[2])
+              - self.HELD_DAMPING * head_vz)
+        up = float(np.clip(up, 0., self.HELD_MAX))
+        if up > 0:
+            acc.add(body, np.array([0., 0., up]), point_w=head)
 
     def help_weight(self, t):
         """손 드는 정도 0~1. 주기마다 HELP_SECONDS 동안 1, 앞뒤 0.4초에 걸쳐 부드럽게 오르내린다."""
@@ -280,22 +309,32 @@ class Struggle:
             segments += [(world(shoulder), world(elbow), cfg.ARM_RADIUS * g, self.SHIRT),
                          (world(elbow), world(wrist), cfg.ARM_RADIUS * .78 * g, self.SKIN),
                          (world(wrist), world(wrist + .06 * s * d_fore), .045 * s, self.SKIN)]
-            # 다리: 무릎을 굽힌 채 물속에서 옆·앞으로 원을 그리며 휘젓는다 (허우적대는 발). 걸음처럼 앞뒤로 곧게
-            #   번갈아 차지 않는다 (2026-11-23: 걷는 것처럼 보였음). 박자도 팔과 달리 불규칙하게.
+            # 다리: 두 다리를 반 박자 어긋나게 자전거 페달 밟듯 부드럽게 돌린다 (물에서 버티는 발차기).
+            #   2026-11-23: 팔 박자에 묶여 너무 빠르고(초당 2.8번) 들쭉날쭉해 부자연스러웠음 → 다리는 팔과 따로
+            #   LEG_FREQUENCY로 느리게, 사인 하나로 매끄럽게. 허벅지가 앞으로 올라올 때 무릎이 더 굽는다.
             hip, ankle0 = (np.asarray(p) * s for p in getattr(cfg, f"LEG_{side.upper()}_FROMTO_B"))
             knee0 = np.asarray(getattr(cfg, f"KNEE_{side.upper()}_B")) * s
             thigh, shin = np.linalg.norm(knee0 - hip), np.linalg.norm(ankle0 - knee0)
-            churn = 1.4 * w * t + (0. if side == 'l' else 2.1)
-            kick = .35 + k * (.22 * math.sin(churn) + .1 * math.sin(2.3 * churn + .7))   # 허벅지를 앞으로 들어 올린 각
-            spread = .18 + k * .22 * math.cos(churn)                                      # 옆으로 벌림
-            knee_bend = .9 + k * .35 * math.sin(churn + 1.3)                              # 무릎을 크게 굽힘
+            pedal = 2 * math.pi * self.LEG_FREQUENCY * data.time + self.phase + (0. if side == 'l' else math.pi)
+            leg = min(k, 1.2)
+            # 2026-11-23: 다리를 아래로 쭉 뻗으면 바닥에 선 것처럼 보여서, 무릎을 크게 접어 발이 엉덩이 뒤로 올라오게 한다.
+            kick = -.05 + leg * .3 * (1 + math.sin(pedal)) / 2             # 허벅지를 앞으로 든 각 [rad] (음수면 뒤로)
+            knee_bend = 1.05 + leg * .45 * (1 + math.sin(pedal + .9)) / 2  # 무릎 굽힘 [rad]: 발이 뒤로 올라옴
+            spread = .1                                                     # 옆으로 살짝 벌림
             d_thigh = np.array([-math.cos(kick), sign * math.sin(spread), math.sin(kick)])
+            d_thigh /= np.linalg.norm(d_thigh)
             d_shin = np.array([-math.cos(kick - knee_bend), sign * .5 * math.sin(spread), math.sin(kick - knee_bend)])
-            knee = hip + thigh * d_thigh / np.linalg.norm(d_thigh)
-            ankle = knee + shin * d_shin / np.linalg.norm(d_shin)
+            d_shin /= np.linalg.norm(d_shin)
+            knee = hip + thigh * d_thigh
+            ankle = knee + shin * d_shin
+            # 발: 정강이에 수직인 앞쪽(+z) 방향과 정강이 방향을 섞어 발끝이 살짝 펴지게 (정강이를 따라 함께 돈다)
+            forward = np.array([0., 0., 1.]) - d_shin[2] * d_shin
+            forward /= np.linalg.norm(forward)
+            d_foot = .75 * forward + .66 * d_shin
+            d_foot /= np.linalg.norm(d_foot)
             segments += [(world(hip), world(knee), cfg.LEG_RADIUS * g, self.TROUSERS),
                          (world(knee), world(ankle), cfg.LEG_RADIUS * .7 * g, self.TROUSERS),
-                         (world(ankle), world(ankle + np.array([-.03, 0, .12]) * s), .05 * s, self.SHOES)]
+                         (world(ankle), world(ankle + .13 * s * d_foot), .05 * s, self.SHOES)]
         return segments
 
     SPLASH_DROPS = 18       # 손 하나당 물보라 방울 수 (화면 표시만). 10 → 18
