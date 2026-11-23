@@ -73,13 +73,17 @@ class Names:
     LIFEBUOY_GRIP_L_SITE = "lifebuoy_grip_l"
     LIFEBUOY_GRIP_R_SITE = "lifebuoy_grip_r"
     HUMAN_RING_GRASP_EQ = "human_ring_grasp"
+    # 착용 weld 이름. 손으로 잡은 뒤 스스로 착용(SelfWear)할 때 켜진다. 동경 launcher.py도 "착용 weld가 없는지" 검사할 때 쓴다.
+    HUMAN_RING_WORN_EQ = "human_ring_worn"
     HUMAN_ARM_BODY_PREFIX = "human_arm_body"
     HUMAN_ARM_JOINT_PREFIX = "human_arm_joint"
     HUMAN_ARM_ACTUATOR_PREFIX = "human_arm_drive"
-    HUMAN_RING_WORN_EQ = "human_ring_worn"
     TEST_TOW_BODY = "test_tow_driver"
     HUMAN_TOW_SITE = "human_tow_point"    # 이전 초안의 예약 이름. 실제 로프는 구명환에 연결
     TETHER_TENDON = "tow_tendon"          # 배와 구명환을 연결할 tendon
+    WOLMIDO_PREFIX = "wolmido"            # 월미도 맵 형상 이름 앞부분 (가영)
+    WOLMIDO_WALL_GEOM = "wolmido_wall"
+    WOLMIDO_RIPRAP_GEOM = "wolmido_riprap"
     LAUNCHER_MOUNT_EQ = "launcher_mount"  # 발사 전 구명환을 배 발사대에 고정하는 weld (로봇 launcher.py)
     LIFEBUOY_BODY = "lifebuoy"
     LIFEBUOY_FREE = "lifebuoy_free"       # 구명환 단독 시험 때만 사용하는 자유 관절
@@ -342,20 +346,25 @@ class Contacts:
     #       0이 아니면 두 geom의 접촉을 계산한다.
     # 규칙: 서로 다른 물체(배·사람·구명환)끼리만 부딪히고, 같은 종류끼리는 부딪히지 않는다.
     #       → 관절 팔 모드에서 사람 부위끼리 서로 밀어내는 자기 충돌이 생기지 않는다.
-    # 이유: 구명환 착용(겨드랑이·팔 통과)과 배 접근 때 관통을 막기 위해 필요. 1주차엔 바다 바닥·수면
+    # 이유: 손에 쥔 구명환과 배 접근 때 관통을 막기 위해 필요. 1주차엔 바다 바닥·수면
     #       접촉이 없으므로 월드 쪽 비트는 두지 않는다.
     BOAT = 1
     HUMAN = 2
     LIFEBUOY = 4
+    # 고정 지형(방파제·바위·육지). 2026-11-19 가영: 월미도 해안 맵용. 지형끼리는 같은 world body라 충돌하지 않는다.
+    # 지형 쪽 conaffinity만 배·사람·구명환 비트를 가지면 MuJoCo 규칙상 충돌하므로 다른 물체의 값은 바꾸지 않는다.
+    ENV = 8
     BOAT_AFFINITY = HUMAN | LIFEBUOY
     HUMAN_AFFINITY = BOAT | LIFEBUOY
     LIFEBUOY_AFFINITY = BOAT | HUMAN
+    ENV_AFFINITY = BOAT | HUMAN | LIFEBUOY
     # PHYSICS geom이 쓸 수 있는 (contype, conaffinity) 조합. (0, 0)은 시험용으로 접촉을 끈 형상.
     ALLOWED_PHYSICS = {
         (0, 0),
         (BOAT, BOAT_AFFINITY),
         (HUMAN, HUMAN_AFFINITY),
         (LIFEBUOY, LIFEBUOY_AFFINITY),
+        (ENV, ENV_AFFINITY),
     }
 
 
@@ -667,6 +676,20 @@ class Human:
     # 무엇: 사람 모델 전체 질량 [kg]. 단순 구현용 가정값이며 검증된 대표값이 아니다.
     # 질량은 human.py에서만 설정하고, 물 모듈이 이를 다시 추가하지 않는다.
     MASS = 70.0
+    # 무엇: 몸집 단계. Human(size=...)로 고르며 생략하면 SIZE를 쓴다.
+    # 값: (키 [m], 몸무게 [kg]). medium은 아래 기준 형상 그대로(머리끝~발끝 약 1.74m, MASS 70kg).
+    # 근거(2026-11-19 가영): ANSUR II 공개 자료(미 육군 2012, 남 4,082·여 1,986명) 실측 stature·weightkg에서 직접 계산.
+    #   small = 여성 하위 5% (152.5cm, 51.3kg), large = 남성 상위 5% (187.0cm, 110.7kg).
+    #   "여성 5% ~ 남성 95%"는 인체 설계에서 성인 90%를 포괄하는 관례 범위다. 참고: 한국 8차 인체치수조사
+    #   (2020~21) 평균 키 남 172.5cm·여 159.6cm.
+    #   https://www.openlab.psu.edu/ansur2/
+    # 크기 바꾸는 법(human.py): 길이는 키 비율 s로 늘이고, 몸통·팔다리 굵기는 추가로 k = √(질량비 / s³)배 한다.
+    #   부피 ∝ s³k² = 질량비 → 평균 밀도가 medium과 거의 같아 물에 뜨는 정도가 유지된다.
+    #   머리·손·발·얼굴은 길이 비율 s만 적용한다.
+    SIZE = "medium"
+    SIZES = {"small": (1.525, 51.3), "medium": (None, None), "large": (1.870, 110.7)}
+    # medium 형상의 키 [m] (머리끝~발끝, 2026-11-19 측정 1.736m). 길이 비율 s = 키 / REFERENCE_HEIGHT.
+    REFERENCE_HEIGHT = 1.736
     # 기존 box 모드에서만 지정하는 무게중심 [m].
     # humanoid 모드의 무게중심·관성은 아래 부위별 형상·질량에서 MuJoCo가 계산한다.
     COM = (0.0, 0.0, 0.0)
@@ -685,7 +708,6 @@ class Human:
     #   질량 비율을 de Leva로 바꿔 부피 71.9L·밀도 973kg/m³ (숨을 들이쉰 사람 약 985)로 맞췄다.
     #   잔잔한 바다에서 혼자 거의 수평(약 3°)으로 누운 자세, 얼굴 앞면이 수면 위 약 4cm로 약 5초 안에 자리 잡는다
     #   (팔·다리 안쪽 비율까지 de Leva로 바꾼 뒤 측정).
-    #   가슴 단면(반폭 0.19)은 구명환 안쪽 반지름(약 0.24m)보다 작아 착용 형상을 유지한다.
     TORSO_SECTIONS_B = ((-.20, .14, .10), (-.08, .13, .105),
                         (.15, .17, .125), (.36, .19, .115), (.44, .10, .07))
     ELBOW_L_B = (.55, .40, -.015)
@@ -736,9 +758,12 @@ class Lifebuoy:
     # 전체 질량 [kg]. 캡슐 12개에 나눠 주며 12배로 증가시키지 않는다.
     # 2026-11-16 가영: 2.0 → 2.5kg (LSA Code 최소 질량). 사람 70kg + 환 2.5kg = 72.5kg.
     MASS = 2.5
-    # 고정 연결 시험: 사람 좌표에서 머리 쪽(+x)으로 0.35m인 상체 부근.
-    # 환은 사람의 x축에 수직인 yz 평면에 놓여 상자 몸통을 둘러싼다.
+    # 2026-11-19 가영: 처음부터 몸에 끼운 상태(Lifebuoy(attached=True))로는 시작하지 않는다.
+    # 2026-11-23 가영 정정: 손으로 잡은 뒤 사람이 스스로 착용하는 흐름(wear.py SelfWear)은 유지한다.
+    #   착용이 끝나면 SelfWear가 착용 weld(Names.HUMAN_RING_WORN_EQ)를 켠다.
     INDEPENDENT_POSITION_W = (1.2, 0.0, 1.0)  # 독립 시험의 정면 전달 위치
+    # 착용 목표 위치: 사람 좌표에서 머리 쪽(+x)으로 0.35m인 상체 부근 (SelfWear·WearApproachFixture가 씀).
+    # 환은 사람의 x축에 수직인 yz 평면에 놓여 상자 몸통을 둘러싼다.
     POSITION_IN_HUMAN_B = (0.35, 0.0, 0.0)
     # 환 로컬 좌표의 로프 연결점 [m]. 현재는 환 표면의 시험 위치이며 정확한 묶음 위치는 조정 대상.
     # 배를 +x 방향에 둔 시험을 가정: +x 쪽 튜브 표면, y가 양수인 테두리.
@@ -819,9 +844,9 @@ class Tether:
     DAMPING = 100.0   # [가영 / 검토 중]  변경(2026-11-17 동경): 10 → 100, 강성과 함께 ζ ≈ 0.13 유지
     # 무엇: 시작부터 줄이 배(tow_point) ↔ 구명환(lifebuoy_tow_point)에 묶여 있는지.
     # 프로젝트 흐름 (2026-11-16 가영): 배에 구명환을 싣고 줄로 묶은 채 출발 → 사람에게 닿지 않고 가까이 정지
-    #   → 배가 줄+구명환을 건네줌 → 사람이 받거나 착용 → 견인. 사람 ↔ 구명환 연결은 이 값이 아니라
-    #   HumanGrasp(잡기)·SelfWear(착용)가 맡는다. 배의 탑재·전달 장치는 동경, 단계 연결은 태수 범위.
-    # 현재 전체 시나리오(rescue_mission)는 처음부터 착용한 사람에 접근 후 줄을 연결하는 이전 흐름이다.
+    #   → 배가 줄+구명환을 건네줌 → 사람이 손으로 잡음 → 견인. 사람 ↔ 구명환 연결은 이 값이 아니라
+    #   HumanGrasp(잡기)가 맡는다 (2026-11-19 착용 기능 삭제). 배의 탑재·전달 장치는 동경, 단계 연결은 태수 범위.
+    # 현재 전체 시나리오(rescue_mission)는 구명환을 처음부터 손에 쥔 사람에 접근 후 줄을 연결하는 시험 흐름이다.
     ATTACH_ON_START = True   # [가영 / 제안] 동경·태수 확인 필요
     # 무엇: 줄이 끊어지는 장력 [N].
     # 근거: NFPA 1983 수상 구조 투척줄(throwline) 최소 파단 강도 13kN. 매듭이 있으면 약 30~40% 낮아진다.
@@ -829,6 +854,88 @@ class Tether:
     #   → 이 배로는 파단 강도의 1~2%만 걸리므로 1주차는 끊김 기능을 구현하지 않는다 (tether.py가 읽지 않음).
     #   큰 배·파도·충격 하중을 넣을 때 다시 검토.
     BREAK_FORCE = 13000.0   # [가영 / 제안]
+
+
+# ─────────────────────────────────────────────────────────────
+# 9-3. 월미도 해안 맵·환경 — 가영 (2026-11-19, 시험용 가정값)
+# ─────────────────────────────────────────────────────────────
+# 장소: 인천 월미도 해안 산책로 앞 바다. 산책로에서 사람이 떨어진 상황을 가정한다.
+# 맵 좌표: 방파제 바다 쪽 면이 월드 x = WALL_FACE_X, 바다는 -x 쪽, 방파제는 y 방향으로 뻗는다.
+# 높이는 만조 수면(z = WaterParams.SURFACE_Z) 기준. 간조는 수면을 내리는 대신 지형 전체를 올려서 표현한다
+#   (수면 높이는 물 담당 config 값이라 맵이 바꾸지 않는다).
+# 아래 치수는 실측 도면이 아니라 시험용 가정값이다. 실제 호안 단면·수심은 확인 필요.
+class Wolmido:
+    WALL_FACE_X = 0.0
+    WALL_LENGTH = 80.0          # 방파제가 맵에서 보이는 길이 [m] (y 방향)
+    LAND_DEPTH = 25.0           # 방파제 뒤 육지(산책로·도로) 깊이 [m] (x 방향)
+    WALL_TOP_Z = 2.5            # 만조 때 산책로 높이 [m] (수면 위)
+    WALL_BOTTOM_Z = -8.0        # 방파제 아래 끝 [m]
+    # 경사 사석(바위 둑): 방파제 발치에서 바다 쪽으로 내려가는 경사. (바다 쪽 거리 m, 높이 m)
+    RIPRAP_TOP = (0.0, -2.0)    # 방파제 면에 붙은 위 끝
+    RIPRAP_TOE = (-5.0, -6.0)   # 바다 쪽 아래 끝
+    RIPRAP_THICKNESS = 1.5
+    # 사석 끝 근처의 큰 바위: (바다 쪽 거리 x, y, 반지름) [m]. 만조에는 물속, 간조에는 수면 근처로 드러난다.
+    BOULDERS = ((-4.6, -6.0, .9), (-5.4, -2.5, .7), (-4.9, 1.5, 1.0),
+                (-5.8, 4.5, .8), (-5.0, -24.0, .7), (-5.2, -9.5, .9))
+    BOULDER_Z = -3.6            # 만조 기준 바위 중심 높이 [m]
+    RAILING_HEIGHT = 1.1        # 산책로 난간 높이 [m] (표시용, 접촉 없음)
+    LADDER_Y = 0.0              # 방파제 사다리 위치 [m] (표시용)
+    # ── 모래 해변 (2026-11-19 추가): 방파제 사이 y 구간을 끊고 완만한 모래 경사를 둔다. 구조 배는 여기서 출발한다.
+    #   (방파제 기준 x, 높이 z) 위 끝·바다 쪽 끝. 기울기 약 1:4.5. 해변 뒤 육지 높이는 BEACH_TOP의 z.
+    BEACH_Y = (6.0, 24.0)
+    BEACH_TOP = (4.0, 1.0)
+    BEACH_TOE = (-30.0, -6.5)
+    BEACH_THICKNESS = 1.5
+    BEACH_START_Y = 15.0        # 배 출발 y [m]
+    BEACH_START_DEPTH = .6      # 배 출발 지점의 물 깊이 [m] (선체 바닥 약 0.1m 아래로 0.5m 여유)
+    BEACH_TOW_STOP = 10.0       # 견인은 출발 지점 10m 앞(물 깊이 약 2.8m)에서 멈춘다 [m]
+    # 견인 거리 상한 [m]. 측정(2026-11-19): 동경 발사 시나리오 견인 속도 0.7m/s로도 물가까지 26m를 끌면
+    #   공용 Watchdog 견인 제한(100초)을 넘는다. 해변 쪽으로 8m 끌어 사람 구조대에 넘기는 것까지를 시험한다.
+    BEACH_TOW_MAX = 8.0
+    # ── 세부 지형 (2026-11-19 추가). 구조 경로(사람 y≈0, 배 출발 y≈8)와 겹치지 않는 곳에 둔다 ──
+    # 테트라포드 구간: 방파제 끝 쪽 파도막이. (x, y) 중심 목록, 다리 길이·반지름 [m], 만조 기준 중심 높이
+    TETRAPODS = tuple((x, y) for y in (-38.0, -35.5, -33.0, -30.5) for x in (-1.6, -3.6))
+    TETRAPOD_LEG = 1.1
+    TETRAPOD_RADIUS = .32
+    TETRAPOD_Z = -.6
+    # 계단식 친수 호안: 방파제 앞으로 내려가는 계단. y 범위, 단 수, 단 높이·너비 [m]
+    STEPS_Y = (-20.0, -13.0)
+    STEP_COUNT = 6
+    STEP_RISE = .5
+    STEP_RUN = .6
+    # 여객선 선착장(영종도 구읍뱃터 항로): 물에 뜬 폰툰과 고정 말뚝, 산책로에서 내려가는 연결 다리.
+    #   폰툰은 물에 떠 있으므로 간조에도 수면 높이에 남고, 말뚝·지형만 올라간다.
+    PONTOON_CENTER = (-8.0, 28.0)   # (x, y) [m]
+    PONTOON_SIZE = (10.0, 4.0, .8)  # 길이(x)·폭(y)·높이 [m]
+    PONTOON_FREEBOARD = .4          # 수면 위로 나온 높이 [m]
+    PILES = ((-3.5, 25.5), (-3.5, 30.5), (-12.5, 25.5), (-12.5, 30.5))
+    PILE_RADIUS = .3
+    PILE_TOP_Z = 4.0                # 만조 기준 말뚝 윗끝 [m]
+    MOORED_BOAT = dict(center=(-8.0, 32.4), size=(6.0, 2.0, 1.2))  # 폰툰 옆에 묶인 작은 배 (고정 형상)
+    # 항로 표지 부표: 물에 떠 있는 고정 형상. (x, y)
+    BUOYS = ((-38.0, -18.0), (-40.0, 22.0))
+    BUOY_RADIUS = .6
+    # 산책로 시설 (표시용): 가로등 간격, 벤치·구명환 보관함 y 위치, 대관람차 위치(육지 쪽 랜드마크)
+    LAMP_SPACING = 10.0
+    BENCH_Y = (-26.0, -6.0, 2.0, 32.0)
+    LIFEBUOY_BOX_Y = (-10.0, 4.0)
+    FERRIS_WHEEL = dict(center=(18.0, -8.0), radius=9.0)
+    SEABED_Z = -6.5                 # 만조 기준 바다 바닥 (표시용, 접촉 없음). 해변 경사 아래 끝과 같은 높이
+    # 간조 때 수면이 내려가는 양 [m]. 인천은 조차가 큰 곳(대조 때 8m 이상)이라 가정값으로 중간 수준을 둔다.
+    LOW_TIDE_DROP = 4.0
+    # 환경 3개: 같은 맵, 조건만 다르게. 배는 해변 물가에서 출발하고 사람은 바다 한가운데에 떠 있다.
+    #   waves: WaterParams의 파도 설정 이름, tide_drop: 간조로 내려간 수면 [m], victim: 사람 초기 위치 (x, y) [m].
+    #   배 출발 위치는 해변 경사에서 물 깊이 BEACH_START_DEPTH인 곳으로 계산하고, 사람 쪽을 보고 출발한다.
+    #   견인은 사람을 해변 출발 지점 쪽으로 끌고 오다가 BEACH_TOW_STOP 앞에서 멈춘다.
+    ENVIRONMENTS = {
+        # 1. 만조·잔잔
+        "calm": dict(waves="WAVES_CALM", tide_drop=0.0, victim=(-38.0, 4.0)),
+        # 2. 만조·파도 (미현 기본 파도)
+        "waves": dict(waves="WAVES_DEFAULT", tide_drop=0.0, victim=(-38.0, 4.0)),
+        # 3. 간조·잔잔: 물이 빠져 해변이 넓게 드러나고 방파제 앞 바위가 수면 위로 나온다. 물가가 사람 쪽으로 다가온다.
+        "low_tide": dict(waves="WAVES_CALM", tide_drop=LOW_TIDE_DROP, victim=(-38.0, 4.0)),
+    }
+    # 해류(썰물 흐름) 환경은 물 담당(Owner.CURRENT)의 해류 지원이 생기면 추가한다.
 
 
 # ─────────────────────────────────────────────────────────────

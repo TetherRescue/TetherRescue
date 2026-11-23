@@ -24,14 +24,17 @@ class HumanGrasp:
     """전달 신호와 거리·상대 속도를 확인해 비활성 weld를 켠다.
 
     손가락·팔 관절·접촉의 실제 잡기 동작이 아닌 고정 잡기 근사다.
-    build 순서: Human(grip_sites=True) → Lifebuoy(attached=False, grip_sites=True) → HumanGrasp.
+    build 순서: Human(grip_sites=True) → Lifebuoy(grip_sites=True) → HumanGrasp.
+    held=True: 처음부터 쥐고 있는 시험. Lifebuoy(held_by=human)로 손 옆에 둔 초기 배치의 상대 자세를
+    컴파일 때 고정하고 켠 채로 시작한다 (mj_resetData 후에도 켜진 상태로 돌아온다).
     """
     REQUIRES = {'max_dt': .002}
 
-    def __init__(self, *, hand='left', settings=None, ring_site=None):
+    def __init__(self, *, hand='left', settings=None, ring_site=None, held=False):
         if hand not in ('left', 'right'):
             raise ValueError("hand는 left 또는 right여야 합니다.")
         self.hand = hand
+        self.held = bool(held)
         self.settings = GraspSettings() if settings is None else settings
         self.hand_name = config.Names.HUMAN_GRIP_L_SITE if hand == 'left' else config.Names.HUMAN_GRIP_R_SITE
         self.ring_name = config.Names.LIFEBUOY_GRIP_L_SITE if hand == 'left' else config.Names.LIFEBUOY_GRIP_R_SITE
@@ -49,8 +52,8 @@ class HumanGrasp:
         equality = spec.add_equality(name=config.Names.HUMAN_RING_GRASP_EQ,
                                      type=mujoco.mjtEq.mjEQ_WELD, objtype=mujoco.mjtObj.mjOBJ_BODY,
                                      name1=spec.site(self.hand_name).parent.name, name2=config.Names.LIFEBUOY_BODY,
-                                     active=False)
-        equality.data[:] = 0
+                                     active=self.held)
+        equality.data[:] = 0  # 상대 자세 quaternion 0 → MuJoCo가 초기 배치(qpos0)에서 계산
         equality.data[10] = 1  # 회전도 고정하는 weld의 torque scale
         equality.solref[:] = [.02, 1]
 
@@ -144,6 +147,7 @@ class HumanGrasp:
     def reset(self, model, data):
         self.release(model, data)
         model.eq_data[self.eq_id] = self._initial_data
+        data.eq_active[self.eq_id] = self.held
 
     def add_forces(self, model, data, acc):
         """잡기 제약 힘은 엔진이 계산한다. 외력에 중복 합산하지 않는다."""

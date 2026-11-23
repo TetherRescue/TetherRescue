@@ -62,9 +62,9 @@ def test_shared_rope_drawing_preserves_physics_and_handles_scene_contents(clear,
     mujoco = pytest.importorskip('mujoco')
     from sim import config
     from sim.world.rope_visual import draw_rope
-    from sim.world.scenarios import WearDemo
+    from sim.world.scenarios import GraspDemo
 
-    demo = WearDemo()
+    demo = GraspDemo()
     model, data = demo.world.model, demo.world.data
     if not attached:
         demo.rope.detach(model)
