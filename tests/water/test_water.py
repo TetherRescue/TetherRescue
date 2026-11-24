@@ -455,6 +455,55 @@ def test_heave_world_only_assumes_upright_body():
     np.testing.assert_allclose(force_w, 0.0, atol=1e-9)
 
 
+def _tilted_boat(roll_deg, pitch_deg, vel_w):
+    """흘수 위치의 상자를 롤·피치만큼 기울이고 월드 속도 vel_w 를 준다."""
+    model, data, bid = _boat()
+    quat = np.zeros(4)
+    mujoco.mju_euler2Quat(quat, np.radians([roll_deg, pitch_deg, 0.0]), "xyz")
+    data.qpos[3:7] = quat
+    data.qvel[0:3] = vel_w
+    mujoco.mj_forward(model, data)
+    return model, data, bid
+
+
+def test_boat_drag_never_pushes_along_its_motion():
+    # 배 저항은 움직임을 멈추게만 해야 한다: 힘 · 속도 ≤ 0 (어떤 기울기·속도에서도).
+    #   heave 힘을 몸체 z 축으로 걸던 때는 기운 배가 위아래로 움직이면 옆으로 미는 성분이 생겨,
+    #   파도 속에서 추력 0 인데 0.61 m/s 표류했다 (2026-11-24, 월미도 견인 시간 초과).
+    #   앞뒤·옆 저항이 크면 heave 의 옆 성분을 가려서, heave 계수만 남겨 그 몫만 본다.
+    heave_only = dict(COEFFS)
+    heave_only["lin"] = COEFFS["lin"] * np.array([0.0, 0.0, 1.0])
+    heave_only["quad"] = COEFFS["quad"] * np.array([0.0, 0.0, 1.0])
+    rng = np.random.default_rng(1004)
+    for _ in range(200):
+        roll, pitch = rng.uniform(-15.0, 15.0, size=2)
+        vel_w = rng.uniform(-2.0, 2.0, size=3)
+        for coeffs in (COEFFS, heave_only):
+            model, data, bid = _tilted_boat(roll, pitch, vel_w)
+            force_w, _ = water.water_drag(model, data, bid, coeffs, heave_world_only=True)
+            assert force_w @ vel_w <= 1e-9
+
+
+def test_boat_heave_drag_is_world_vertical_and_unchanged_when_upright():
+    # 기운·뒤집힌 배가 세상 위로만 움직이면: heave 몫은 예전 힘(몸체 z)의 월드 z 성분만 남는다 (옆 몫 없음).
+    #   옆 성분은 sway·surge 저항(몸체 축)에서만 나온다. 뒤집힌 배(180°)도 heave 몫이 움직임을 막아야 한다.
+    for roll in (10.0, 180.0):
+        model, data, bid = _tilted_boat(roll, 0.0, (0.0, 0.0, 0.5))
+        force_w, _ = water.water_drag(model, data, bid, COEFFS, heave_world_only=True)
+        vel_b = frames.world_to_body(data, bid, np.array([0.0, 0.0, 0.5]))   # 월드 위로만 → heave 칸도 같은 값
+        drag, _ = water.drag_b(vel_b, [0.0, 0.0, 0.0], COEFFS)
+        side_w = frames.body_to_world(data, bid, np.array([drag[0], drag[1], 0.0]))
+        up = frames.body_to_world(data, bid, np.array([0.0, 0.0, 1.0]))[2]
+        np.testing.assert_allclose(force_w, side_w + np.array([0.0, 0.0, drag[2] * up]), atol=1e-9)
+        assert force_w[2] - side_w[2] < 0                  # 위로 움직이면 heave 몫은 아래로
+    # 똑바로 떠 있으면 몸체 z = 월드 z → 예전 계산(전부 몸체 축으로 되돌리기)과 같다
+    model, data, bid = _moving_boat(yaw_deg=30.0, vel_w=(1.2, -0.4, 0.3))
+    force_w, _ = water.water_drag(model, data, bid, COEFFS, heave_world_only=True)
+    vel_b = frames.world_to_body(data, bid, np.array([1.2, -0.4, 0.3]))
+    drag, _ = water.drag_b(vel_b, [0.0, 0.0, 0.0], COEFFS)
+    np.testing.assert_allclose(force_w, frames.body_to_world(data, bid, drag), atol=1e-9)
+
+
 # ─────────────────────────────────────────────────────────────
 # 6. 실제 시뮬레이션: 물 + 로봇을 조립해서 시간을 흘려 본다 (1주차 완료 기준)
 # ─────────────────────────────────────────────────────────────
@@ -704,6 +753,19 @@ def test_calm_water_no_drift(added_mass_on):
     vel_b = _push(world, (0.0, 0.0, 0.0), seconds=DRIFT_SECONDS)
     assert np.all(np.isfinite(vel_b)), "계산이 폭발함 (NaN)"
     assert np.linalg.norm(world.data.xipos[bid, :2] - start) < DRIFT_MAX
+
+
+def test_waves_do_not_push_idle_boat_away():
+    # 파도 속 추력 0: 위아래로 출렁이기만 하고 한쪽으로 떠내려가지 않아야 함.
+    #   heave 저항을 몸체 z 축으로 걸던 때는 기운 배를 옆으로 밀어 파도를 거슬러 0.61 m/s 표류했다
+    #   (2026-11-24, 월미도 견인 시간 초과). 월드 위아래로만 걸면 약 0.013 m/s.
+    world = build_world(parts=(Water(waves=WaterParams.WAVES_DEFAULT), Robot()))
+    bid = world.parts[0].body_id
+    start = world.data.xipos[bid, :2].copy()
+    seconds = 30.0
+    _run(world, seconds)
+    drift = np.linalg.norm(world.data.xipos[bid, :2] - start) / seconds
+    assert drift < 0.05
 
 
 # ─────────────────────────────────────────────────────────────
