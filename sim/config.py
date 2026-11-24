@@ -323,10 +323,21 @@ class Thruster:
     #       물 밖에 나와 60 초에 99° 옆으로 돌았고, −0.10 은 33° 로 줄었음
     POS_L_B = (-0.70, 0.525, -0.10)
     POS_R_B = (-0.70, -0.525, -0.10)
+    # 무엇: 좌·우 워터젯 흡입구 위치 [m], 몸체 좌표. z = 선체 바닥(−0.10) 아래 6 cm
+    #   흡입구가 수면 위로 나온 스텝에는 그쪽 추력이 0 (노즐이 아니라 흡입구가 공기를 빨면 추력을 잃으므로).
+    #   추력을 거는 점은 위 노즐(POS_*_B) 그대로이고 질량·부력도 그대로라 흘수는 변하지 않는다.
+    #   뒤집히면 몸체 z 를 뒤집은 자리(갑판 위 6 cm)의 흡입구로 본다 (양면 워터젯 가정, Inversion)
+    # 사용: 로봇 intakes_submerged (추력 차단 판정)
+    # 이유: 2026-11-24 팀 제안 → 측정 (기본 파도 직진 30 초, 방향 6 가지 평균, 이때 heave 저항은 수정 전).
+    #   노출 = 판정 점이 수면 위인 시간 비율: 노즐 기준 27 %, 흡입구 바닥 높이 28 %, 3 cm 아래 5 %, 6 cm 아래 1 %, 10 cm 아래 0 %
+    #   → 기준점만 옮기면 효과가 없고 내려야 함. 최대 전진 속도 3.7 → 4.9 m/s (6 cm)
+    # 아직 안 넣은 것: 튀어나온 흡입구의 저항·무게, 줄·바닥에 걸림 (충돌 형상 없음). x 는 다리 안쪽 임의 위치 [테스트값]
+    INTAKE_L_B = (-0.30, 0.525, -0.16)
+    INTAKE_R_B = (-0.30, -0.525, -0.16)
     # 무엇: 프로펠러가 이 깊이 [m] 이상 잠겨야 추력 100%. 파도로 물 밖에 나오면 추력이 줄어든다.
     # 사용: 로봇. 물의 수면 높이 함수가 필요함 (WaterAPI 참고)
     # 결정: 비워 둠. WaterAPI.USE_IN_WEEK1 = False 라 1주차엔 안 씀. 연동할 때 정함 (PoC: 0.08 m)
-    #   그 전까지 로봇은 Robot(surface_height=...) 를 받았을 때만 "노즐이 수면 위면 추력 0" (켜고 끄기만) 으로 처리.
+    #   그 전까지 로봇은 수면 함수가 있을 때(build_world 가 Water 와 자동 연결) "흡입구가 수면 위면 추력 0" (켜고 끄기만) 으로 처리.
     #   이유: 물 밖에서도 추력이 걸리면 짧은 파도에서 공중에서 밀리다 뒤집히는 가짜 결과가 나옴 (2026-11-13 검증)
     FULL_THRUST_DEPTH = None
 
@@ -1071,6 +1082,13 @@ def _check_water_robot():
         raise ValueError(f"왼쪽 추진기 y 는 양수여야 함 (FLU, 지금 {Thruster.POS_L_B[1]}).")
     if Thruster.POS_R_B is not None and Thruster.POS_R_B[1] >= 0:
         raise ValueError(f"오른쪽 추진기 y 는 음수여야 함 (FLU, 지금 {Thruster.POS_R_B[1]}).")
+    # 흡입구: 선체 바닥이거나 그 아래, 위에서 봤을 때 선체 길이·폭 안, 왼쪽은 y>0 · 오른쪽은 y<0
+    for name, side in (("INTAKE_L_B", 1), ("INTAKE_R_B", -1)):
+        pos = getattr(Thruster, name)
+        if len(pos) != 3 or pos[1] * side <= 0:
+            raise ValueError(f"Thruster.{name} 은 (x, y, z) 3개이고 왼쪽 y>0 · 오른쪽 y<0 여야 함 (지금 {pos}).")
+        if half is not None and (abs(pos[0]) > half[0] or abs(pos[1]) > half[1] or pos[2] > -half[2]):
+            raise ValueError(f"Thruster.{name} {pos} 는 선체 길이·폭 안, 바닥(z {-half[2]}) 아래여야 함.")
 
     # 중력은 채워졌다면 양수 (부호는 아래 방향으로 water.py 가 처리)
     if Physics.GRAVITY is not None and Physics.GRAVITY <= 0:

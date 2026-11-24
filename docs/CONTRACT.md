@@ -491,6 +491,9 @@ small은 ANSUR II 여성 하위 5%(152.5cm·51.3kg), large는 남성 상위 5%(1
   `add_forces`가 매 스텝 `update_inversion`으로 갱신합니다.
 - 뒤집히면 양면 워터젯을 가정해 노즐 자리의 몸체 z를 뒤집은 점(물속 쪽)에서 밀고, 좌우 추력을 바꿔
   조향 + = 세상 왼쪽을 유지합니다. `thrusts()`는 명령 기준 값 그대로입니다.
+- 추력 차단 기준은 노즐이 아니라 흡입구입니다 (2026-11-24, 팀 제안). `Thruster.INTAKE_L_B/R_B` = 다리 바닥 아래 6cm,
+  뒤집히면 갑판 쪽 6cm. 흡입구가 수면 위인 스텝에는 그쪽 추력이 0입니다(`Robot.intakes_submerged`, 이전 `nozzles_submerged`).
+  추력 작용점은 노즐(`POS_L_B/R_B`) 그대로이고 질량·부력·충돌 형상은 바뀌지 않습니다(흘수 유지). 흡입구 저항·줄 걸림은 없습니다.
 - 카메라(`Names.CAMERA_BOW`)는 회전 팔 몸체 `Names.CAMERA_ARM_BODY`(배의 자식, 몸체 x축 경첩 `CAMERA_ARM_JOINT`)에
   달려 있고 카메라 무게(0.6kg)도 이 팔 몸체에 있습니다. 배 몸체 질량은 카메라를 뺀 19.0kg이며
   배 + 팔(`body_subtreemass`, `subtree_com`)이 `Hull.MASS`·`Hull.COM`과 같습니다. 물은 `body_subtreemass`를 읽습니다.

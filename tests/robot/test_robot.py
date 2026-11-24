@@ -185,20 +185,54 @@ def test_steer_positive_turns_left():
     assert ang_w[2] > 0.1
 
 
-# ── 노즐이 물 밖이면 추력 0 (Robot(surface_height=...)) ─────────
-def test_nozzles_submerged_in_calm_water():
-    # 잔잔한 물에 흘수만큼 띄운 시작 자세 → 바닥의 노즐 둘 다 물속
+# ── 흡입구가 물 밖이면 추력 0 (Robot(surface_height=...)) ─────────
+def test_intakes_submerged_in_calm_water():
+    # 잔잔한 물에 흘수만큼 띄운 시작 자세 → 바닥 아래 흡입구 둘 다 물속
     from sim.water import water
     model, data, robot = _robot_world()
     robot.surface_height = lambda x, y, t: water.wave_height(x, y, t, config.WaterParams.WAVES_CALM)
-    assert robot.nozzles_submerged(data) == (True, True)
+    assert robot.intakes_submerged(data) == (True, True)
 
 
-def test_dry_nozzle_gives_no_thrust():
-    # 왼쪽(+y) 노즐만 수면 위 → 오른쪽 추력만 걸림 → 전진 명령에도 왼쪽으로 돎
+@pytest.mark.parametrize('inverted', [False, True])
+def test_intakes_are_six_cm_outside_the_hull_on_the_wet_side(inverted):
+    # 바로 섰으면 바닥 아래 6 cm, 뒤집히면 갑판 쪽 6 cm. 좌우는 각 다리 안 (손 계산: 0.10 + 0.06)
+    model, data, robot = _robot_world()
+    robot.inverted = inverted
+    points_b = data.xmat[robot.body_id].reshape(3, 3).T @ (robot.intake_points_w(data) - data.xpos[robot.body_id]).T
+    z = 0.16 if inverted else -0.16
+    np.testing.assert_allclose(points_b.T, [(-0.30, 0.525, z), (-0.30, -0.525, z)], atol=1e-12)
+    assert all(config.hull_contains(np.array([[x, y, 0.0]]))[0] for x, y, _ in points_b.T)
+
+
+def test_thrust_continues_when_only_the_nozzle_is_out_of_water():
+    # 수면이 노즐(바닥)과 흡입구(바닥 아래 6 cm) 사이: 노즐은 물 밖이어도 흡입구가 잠겨 추력이 그대로,
+    # 힘은 흡입구가 아니라 노즐 자리에 걸린다
+    model, data, robot = _robot_world()
+    nozzle_z = data.site_xpos[robot.thr_l_site_id][2]
+    robot.surface_height = lambda x, y, t: np.full(np.shape(x), nozzle_z - 0.03)
+    assert robot.intakes_submerged(data) == (True, True)
+    robot.set_command(1.0)
+    acc = ForceAccumulator()
+    calls = []
+    original = acc.add
+    acc.add = lambda body, force, **kw: (calls.append((body, np.array(force), kw.get('point_w'))), original(body, force, **kw))
+    robot.add_forces(model, data, acc)
+    thrust = [(f, p) for b, f, p in calls if b == robot.body_id and p is not None]
+    assert len(thrust) == 2
+    for (force, point), site in zip(thrust, robot.site_ids):
+        np.testing.assert_allclose(np.linalg.norm(force), Thruster.MAX_FORWARD)
+        np.testing.assert_allclose(point, data.site_xpos[site])
+    # 수면이 흡입구보다 낮아지면 둘 다 끊긴다
+    robot.surface_height = lambda x, y, t: np.full(np.shape(x), nozzle_z - 0.07)
+    assert robot.intakes_submerged(data) == (False, False)
+
+
+def test_dry_intake_gives_no_thrust():
+    # 왼쪽(+y) 흡입구만 수면 위 → 오른쪽 추력만 걸림 → 전진 명령에도 왼쪽으로 돎
     model, data, robot = _robot_world()
     robot.surface_height = lambda x, y, t: np.where(np.asarray(y) > 0, -10.0, 10.0)
-    assert robot.nozzles_submerged(data) == (False, True)
+    assert robot.intakes_submerged(data) == (False, True)
     robot.set_command(1.0)
     _run(model, data, robot, 0.5)
     _, ang_w = frames.body_velocity_w(model, data, robot.body_id)
@@ -206,11 +240,11 @@ def test_dry_nozzle_gives_no_thrust():
 
 
 def test_no_surface_height_keeps_week1_assumption():
-    # surface_height 없으면 1주차 가정 그대로 "항상 물속" (WaterAPI.USE_IN_WEEK1 = False)
+    # 수면 함수가 연결되지 않으면 "항상 물속"
     model, data, robot = _robot_world()
     data.qpos[robot.qpos_adr + 2] = 100.0   # 물 위 높이 올려도
     mujoco.mj_forward(model, data)
-    assert robot.nozzles_submerged(data) == (True, True)
+    assert robot.intakes_submerged(data) == (True, True)
 
 
 def _com_velocity(world, robot):

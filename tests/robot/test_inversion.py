@@ -60,7 +60,7 @@ def test_forward_and_left_turn_work_both_ways_up(roll):
     robot.set_command(forward=1.)
     _run(world, 2.)
     velocity, _ = body_velocity_w(world.model, world.data, robot.body_id)
-    assert velocity[0] > .5 and robot.nozzles_submerged(world.data) == (True, True)
+    assert velocity[0] > .5 and robot.intakes_submerged(world.data) == (True, True)
 
     world, robot = _world(roll)
     robot.set_command(steering=1.)
