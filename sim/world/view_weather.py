@@ -101,6 +101,7 @@ def run_viewer(mission, sky, title, speed=1.):
                 draw_rope(viewer.user_scn, world.model, world.data, mission.rope)
                 if struggle is not None:
                     struggle.draw(viewer.user_scn, world.model, world.data)
+                sky.draw_fog(viewer.user_scn, viewer.cam, world.data.time)
                 sky.draw_rain(viewer.user_scn, viewer.cam.lookat, world.data.time)
                 if wave is not None:
                     wave.update(world.model, world.data.time)
