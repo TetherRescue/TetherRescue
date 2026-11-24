@@ -325,7 +325,8 @@ def drag_b(vel_b, omega_b, coeffs):
 def water_drag(model, data, body_id, coeffs, heave_world_only=False):
     """지금 MuJoCo 상태에서 배가 받는 물 저항 (월드 좌표). 힘은 무게중심에 작용한다.
 
-    heave_world_only: True 면 몸체 z 축(heave) 저항을 세상 위아래 속도로만 계산한다 (아래 3-1).
+    heave_world_only: True 면 몸체 z 축(heave) 저항을 세상 위아래 속도로만 계산하고, 그 힘도 세상 위아래로만 건다
+      (아래 3-1, 5-1).
       몸체 z 축이 위를 향한다고 가정하는 보정이라 배에만 쓴다. 사람·구명환은 몸체 축이 어디로든 누울 수 있어
       (예: 착수한 환은 몸체 z 축이 옆을 향함) 켜면 그 축의 저항이 사라진다 → 기본값 False.
 
@@ -366,7 +367,21 @@ def water_drag(model, data, body_id, coeffs, heave_world_only=False):
     force_b, torque_b = drag_b(rel_vel_b, omega_b, coeffs)
 
     # 5) 세상 기준으로 되돌리기
-    force_w = frames.body_to_world(data, body_id, force_b)
+    # 5-1) heave_world_only 면 heave 힘도 세상 위아래(월드 z)로만 건다 (2026-11-24, 채연 님 월미도 견인 시간 초과 분석).
+    #   몸체 z 축으로 되돌리면 배가 기운 만큼 옆으로 미는 성분이 생긴다. 파도 속에서는 배의 위아래 속도와 기울기가
+    #   같은 박자로 바뀌어 이 옆 성분이 상쇄되지 않고 쌓였다 → 추력 0 인데 파도를 거슬러 0.61 m/s 표류.
+    #   그래서 예전 힘(몸체 z 방향)에서 월드 위아래 몫만 남기고 옆 몫은 뺀다: 월드 z 힘 = heave 힘 × up,
+    #   up = 몸체 z 축의 월드 z 성분 (똑바로 1, 기울면 cosθ, 뒤집히면 −1 → 뒤집혀도 부호가 맞다).
+    #   heave 속도도 up × vz 라서 힘 · 속도 = −c·up²·vz² ≤ 0 → 언제나 위아래 움직임만 멈추는 감쇠기 (표류 0.013 m/s).
+    #   똑바로 떠 있으면 up = 1 이라 결과가 같다.
+    if heave_world_only:
+        up = frames.body_to_world(data, body_id, np.array([0.0, 0.0, 1.0]))[2]
+        heave_b = force_b[2]
+        force_b = force_b.copy()
+        force_b[2] = 0.0
+        force_w = frames.body_to_world(data, body_id, force_b) + np.array([0.0, 0.0, heave_b * up])
+    else:
+        force_w = frames.body_to_world(data, body_id, force_b)
     torque_w = frames.body_to_world(data, body_id, torque_b)
     return force_w, torque_w
 
