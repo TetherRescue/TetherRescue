@@ -958,7 +958,7 @@ def test_calm_surface_visual_stays_flat_plane():
 
 def _surface_mesh_w(model, data, mesh_id):
     """파도 수면 메시의 월드 꼭짓점·법선 (MuJoCo 가 옮기고 돌려 둔 메시 좌표를 geom 자세로 되돌림)."""
-    geom = model.geom(water.WAVE_SURFACE_GEOM).id
+    geom = model.geom(config.Names.WAVE_SURFACE_GEOM).id
     rot, pos = data.geom_xmat[geom].reshape(3, 3), data.geom_xpos[geom]
     vert = slice(model.mesh_vertadr[mesh_id], model.mesh_vertadr[mesh_id] + model.mesh_vertnum[mesh_id])
     normal = slice(model.mesh_normaladr[mesh_id], model.mesh_normaladr[mesh_id] + model.mesh_normalnum[mesh_id])
@@ -975,7 +975,7 @@ def test_wave_surface_visual_follows_wave_height():
     assert model.nhfield == 0
     data.time = 3.7
     mesh_id = water_part.update_surface_visual(model, data)
-    assert mesh_id == model.mesh(water.WAVE_SURFACE_GEOM).id
+    assert mesh_id == model.mesh(config.Names.WAVE_SURFACE_GEOM).id
     mujoco.mj_forward(model, data)
     verts, normals = _surface_mesh_w(model, data, mesh_id)
     center = verts[:, :2].mean(axis=0)
@@ -1056,7 +1056,7 @@ def test_coast_map_draws_one_water_layer():
     from sim.world.coast_map import build_hanagae_world
     def water_geoms(model):
         names = (model.geom(i).name for i in range(model.ngeom))
-        return [name for name in names if name.startswith(water.WAVE_SURFACE_GEOM)]
+        return [name for name in names if name.startswith(config.Names.WAVE_SURFACE_GEOM)]
 
     calm, *_ = build_hanagae_world(waves=CALM)
     sea = calm.model.geom('hanagae_water_surface')
@@ -1067,7 +1067,7 @@ def test_coast_map_draws_one_water_layer():
     model = wavy.model
     assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, 'hanagae_water_surface') == -1
     # 패치와 둘레 바다가 한 메시 → 한 번의 업로드로 함께 바뀐다 (따로면 화면 반영 시점이 어긋나 테두리가 깜빡였다)
-    assert water_geoms(model) == [water.WAVE_SURFACE_GEOM]
+    assert water_geoms(model) == [config.Names.WAVE_SURFACE_GEOM]
     flat = model.geom('hanagae_tidal_flat')
     assert flat.pos[2] + flat.size[2] < WaterParams.SURFACE_Z - water.wave_amplitude(WAVES)
 
