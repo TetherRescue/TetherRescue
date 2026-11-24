@@ -73,7 +73,7 @@ class Names:
     LIFEBUOY_GRIP_L_SITE = "lifebuoy_grip_l"
     LIFEBUOY_GRIP_R_SITE = "lifebuoy_grip_r"
     HUMAN_RING_GRASP_EQ = "human_ring_grasp"
-    # 착용 weld 이름. 착용 기능은 2026-11-19 삭제했지만 동경 launcher.py가 "착용 weld가 없는지" 검사할 때 쓰므로 이름만 남긴다.
+    # 착용 weld 이름. 손으로 잡은 뒤 스스로 착용(SelfWear)할 때 켜진다. 동경 launcher.py도 "착용 weld가 없는지" 검사할 때 쓴다.
     HUMAN_RING_WORN_EQ = "human_ring_worn"
     HUMAN_ARM_BODY_PREFIX = "human_arm_body"
     HUMAN_ARM_JOINT_PREFIX = "human_arm_joint"
@@ -522,6 +522,44 @@ class WaterParams:
     #                                                             [미현 / surge 임시, sway 자료 기반 추정]
     ADDED_MASS_COEF = (0.05, 0.3, None)
 
+    # ── 고속 활주 양력 (2026-11-21, 동경 님 요청 1 "고속 활주를 반영해 주세요") ──
+    # 빠른 배는 뱃머리를 살짝 든 채 물을 아래로 밀어내고, 그 반작용으로 떠오른다 (수상스키와 같은 원리).
+    #   부력(잠긴 부피)과는 다른 힘이라 복셀 부력만으로는 생기지 않는다.
+    # water.py planing_lift() 계산식 (Savitsky 1964 평판 활주 양력 중 "속도로 생기는 항"만 사용):
+    #   양력 L = ½ · ρ · V² · b² · C · λ^0.5 · τ^1.1
+    #     V = 앞으로 가는 속도, τ = 뱃머리 들린 각도(트림) [도], b = 젖은 바닥 평균 폭,
+    #     λ = 젖은 바닥 길이 ÷ b, C = PLANING_LIFT_COEF
+    #   Savitsky 식의 나머지 항(정지 부력 몫)은 빼고 쓴다 → 복셀 부력과 두 번 세지 않기 위해.
+    #   힘 방향은 바닥에 수직(몸체 +z). 그래서 배가 기울면 일부가 뒤로 향해 "유도 저항"이 저절로 생긴다.
+    #   작용점도 Savitsky 압력 중심 식으로 정한다 (젖은 바닥 뒤끝에서 앞으로 lp).
+    #   τ 자리에는 받음각 α = τ − atan(위아래 속도 ÷ V) 를 쓴다 (2026-11-21 보완). 내려앉는 중이면 세게,
+    #   떠오르는 중이면 약하게 받쳐서 위아래 출렁임을 멈추게 한다 (없을 때 300 N 에서 계속 출렁였음).
+    # 출처: Savitsky, D. (1964) "Hydrodynamic Design of Planing Hulls", Marine Technology 1(1).
+    #   이 식은 바닥이 평평한(데드라이즈 0°) 판 기준이고, 검증 범위는 대략 τ 2~15°, λ ≤ 4.
+    #   우리 A형 선체(홈이 있는 판)에 맞는지는 아직 검증 전 → 채연 님 추력-속도 측정 후 조정.  [미현 / 제안]
+    PLANING_ENABLED = True
+    PLANING_LIFT_COEF = 0.012       # Savitsky 식의 계수 그대로                              [미현 / 문헌값]
+    PLANING_MAX_TRIM_DEG = 15.0     # 트림이 이보다 커도 이 각도로 계산 (식의 검증 범위 끝)        [미현 / 제안]
+    # 바닥 칸이 이 깊이 [m] 이상 잠겨야 "완전히 젖은 칸"으로 센다. 그보다 얕으면 비율만큼만.
+    #   살짝 닿는 순간 젖은 넓이가 0 → 전체로 튀면서 힘이 갑자기 생기는 것을 막는다.        [미현 / 제안]
+    PLANING_WET_DEPTH = 0.005       # 아래 바닥 마찰도 같은 기준으로 "젖은 넓이"를 센다
+
+    # ── 젖은 바닥 마찰 (2026-11-21, 동경 님 요청 2 "떠올라도 저항이 사라지지 않게") ──
+    # 위 DRAG_CD 2차 저항은 잠긴 비율(앞면 넓이 = 폭 × 흘수)만큼 줄어서, 활주로 떠오르면 거의 0 이 된다.
+    # 그런데 실제 배는 떠올라도 물에 닿은 바닥이 물에 쓸리며 마찰 저항을 받는다.
+    # water.py bottom_friction(): F = ½ · ρ · V² · S · Cf
+    #   S  = 물에 닿은 바닥 넓이 (잠긴 부피가 아니라 닿은 넓이 → 닿아 있는 한 사라지지 않음)
+    #   Cf = ITTC-1957 마찰선 0.075 / (log10 Re − 2)²,  Re = V · 젖은 길이 / ν
+    # 출처: ITTC (1957) 모형선-실선 상관 마찰선. 매끈한 판 기준이라 실제 선체 거칠기는 반영 안 함.
+    # 주의: 지금 DRAG_CD 의 surge 0.6 은 마찰이 따로 없던 때 정한 값이라, 마찰과 일부 겹칠 수 있다.
+    #   → 요청 3(고속 계수 검증)에서 채연 님 측정과 같이 다시 맞출 것.                    [미현 / 제안]
+    FRICTION_ENABLED = True
+    # 바닷물 동점성계수 [m²/s], 15 °C 기준 약 1.19e-6 (ITTC 권고 물성표 7.5-02-01-03)      [미현 / 문헌값]
+    WATER_KINEMATIC_VISCOSITY = 1.19e-6
+    # 마찰 식을 쓰는 가장 작은 레이놀즈 수. 이보다 느리면 이 값으로 계산 (식이 log10 Re → 2 에서 터짐).
+    #   아주 느릴 때는 힘이 속도² 라 거의 0 이어서 결과에 영향이 작다.                        [미현 / 제안]
+    FRICTION_RE_MIN = 1.0e5
+
     # 물 모듈이 제대로 돌기 위한 조건. max_dt = 허용하는 가장 긴 시뮬레이션 한 칸 시간 [s].
     # Sim.TIMESTEP 합의 결과에 맞춰 바꿀 것.                                 [미현 / 제안]
     # 추천: 0.002 s로 시작하고, 채연 님 속도 측정(bench_speed.py) 결과를 보고 0.004 s로 올려도 안정적인지 나중에 확인. 
@@ -720,9 +758,13 @@ class Lifebuoy:
     # 전체 질량 [kg]. 캡슐 12개에 나눠 주며 12배로 증가시키지 않는다.
     # 2026-11-16 가영: 2.0 → 2.5kg (LSA Code 최소 질량). 사람 70kg + 환 2.5kg = 72.5kg.
     MASS = 2.5
-    # 2026-11-19 가영: 구명환은 사람 몸에 끼우지 않는다. 착용 위치(POSITION_IN_HUMAN_B)·착용 weld를 삭제했다.
-    #   사람과 구명환의 연결은 손으로 잡는 HumanGrasp만 쓴다 (처음부터 쥔 시험은 Lifebuoy(held_by=human)).
+    # 2026-11-19 가영: 처음부터 몸에 끼운 상태(Lifebuoy(attached=True))로는 시작하지 않는다.
+    # 2026-11-23 가영 정정: 손으로 잡은 뒤 사람이 스스로 착용하는 흐름(wear.py SelfWear)은 유지한다.
+    #   착용이 끝나면 SelfWear가 착용 weld(Names.HUMAN_RING_WORN_EQ)를 켠다.
     INDEPENDENT_POSITION_W = (1.2, 0.0, 1.0)  # 독립 시험의 정면 전달 위치
+    # 착용 목표 위치: 사람 좌표에서 머리 쪽(+x)으로 0.35m인 상체 부근 (SelfWear·WearApproachFixture가 씀).
+    # 환은 사람의 x축에 수직인 yz 평면에 놓여 상자 몸통을 둘러싼다.
+    POSITION_IN_HUMAN_B = (0.35, 0.0, 0.0)
     # 환 로컬 좌표의 로프 연결점 [m]. 현재는 환 표면의 시험 위치이며 정확한 묶음 위치는 조정 대상.
     # 배를 +x 방향에 둔 시험을 가정: +x 쪽 튜브 표면, y가 양수인 테두리.
     TOW_POINT_B = (TUBE_RADIUS, CENTERLINE_RADIUS, 0.0)

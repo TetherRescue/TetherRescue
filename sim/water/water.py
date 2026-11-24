@@ -355,6 +355,133 @@ def water_drag(model, data, body_id, coeffs, heave_world_only=False):
 
 
 # ─────────────────────────────────────────────────────────────
+# 고속 활주 양력: 빨리 달리는 배가 물을 아래로 밀어내며 떠오르는 힘 (2026-11-21, 동경 님 요청 1)
+# ─────────────────────────────────────────────────────────────
+def planing_lift(data, body_id, voxels, forces_w, gravity, vel_b):
+    """활주 양력 (월드 좌표 힘, 작용점). 힘이 없으면 (None, None).
+
+    voxels   : 이 몸체의 (칸 중심(몸체 좌표), 칸 크기, 칸 부피). Water.targets 의 값
+    forces_w : voxel_buoyancy 가 돌려준 칸별 부력 → 칸마다 얼마나 잠겼는지 거꾸로 구하는 데 씀
+    gravity  : 중력 크기 [m/s²]
+    vel_b    : 물에 대한 무게중심 속도 (몸체 좌표) [m/s]
+
+    순서 (식과 출처는 config.WaterParams.PLANING_* 주석)
+      1) 뱃머리 방향 수평 속도 V, 뱃머리 들린 각도 τ, 받음각 α = τ − atan(vz / V).
+         뒤로 가거나 α ≤ 0 이면 양력 없음
+      2) 바닥 칸 중 젖은 칸으로 젖은 바닥의 길이·넓이 → 평균 폭 b, 길이비 λ
+      3) L = ½ρV² · b² · C · λ^0.5 · α^1.1  (α 는 도 단위, Savitsky 의 속도 항만. 위아래로 안 움직이면 α = τ)
+      4) 힘은 바닥에 수직(몸체 +z). 수직 성분이 L 이 되도록 L / cos τ 로 건다
+         → 남는 수평 성분이 뒤를 향해 유도 저항이 된다 (L · tan τ)
+      5) 작용점 = 젖은 바닥 뒤끝에서 앞으로 lp (Savitsky 압력 중심 식), 높이는 바닥면
+    """
+    if not config.WaterParams.PLANING_ENABLED or gravity <= 0:
+        return None, None
+    # 1) 트림 τ = 몸체 앞축(x_b)이 수평에서 위로 들린 각도
+    fwd_w = frames.body_to_world(data, body_id, (1.0, 0.0, 0.0))
+    horiz = math.hypot(fwd_w[0], fwd_w[1])
+    if horiz <= 0:
+        return None, None
+    trim = math.atan2(fwd_w[2], horiz)
+    # V = 뱃머리 방향으로 가는 수평 속도
+    vel_w = frames.body_to_world(data, body_id, vel_b)
+    speed = float((vel_w[0] * fwd_w[0] + vel_w[1] * fwd_w[1]) / horiz)
+    if speed <= 0:
+        return None, None
+    # 1-1) 받음각 α = τ − atan(위아래 속도 ÷ V)   (2026-11-21, 300 N 출렁임 보완)
+    #   바닥이 물을 치는 실제 각도. 배가 내려앉는 중이면(vz < 0) 더 세게 치고, 떠오르는 중이면 약하게 친다.
+    #   → 활주 양력이 위아래 움직임을 스스로 멈추게 하는 감쇠 역할을 한다 (실제 활주선의 위아래 감쇠).
+    #   이게 없으면 떠오른 배는 잠긴 부피가 줄어 heave 감쇠(damping_scale)도 사라져서, 300 N 에서
+    #   떴다 가라앉았다를 반복했다.
+    alpha = trim - math.atan2(vel_w[2], speed)
+    if alpha <= 0:
+        return None, None
+    alpha_deg = min(math.degrees(alpha), config.WaterParams.PLANING_MAX_TRIM_DEG)
+    trim_deg = min(math.degrees(trim), config.WaterParams.PLANING_MAX_TRIM_DEG)
+
+    # 2) 젖은 바닥의 길이·넓이 → 평균 폭 b, 길이비 λ
+    wet = wet_bottom(voxels, forces_w, gravity)
+    if wet is None:
+        return None, None
+    beam = wet['area'] / wet['length']
+    lam = wet['length'] / beam
+
+    # 3) 양력 크기 (수직 성분)
+    lift = (0.5 * config.Physics.RHO_WATER * speed ** 2 * beam ** 2
+            * config.WaterParams.PLANING_LIFT_COEF * lam ** 0.5 * alpha_deg ** 1.1)
+
+    # 4) 바닥에 수직인 힘 → 월드. 방향은 실제 바닥 기울기(τ)를 따른다. 뱃머리가 숙여져 있으면(τ < 0) 그대로 cos τ
+    force_w = frames.body_to_world(data, body_id, (0.0, 0.0, lift / math.cos(math.radians(trim_deg))))
+
+    # 5) 압력 중심: lp / (λ b) = 0.75 − 1 / (5.21 · Cv² / λ² + 2.39),  Cv = V / √(g b)
+    cv = speed / math.sqrt(gravity * beam)
+    lp = lam * beam * (0.75 - 1.0 / (5.21 * cv ** 2 / lam ** 2 + 2.39))
+    point_b = (wet['x_aft'] + lp, wet['y_mid'], wet['z'])
+    return force_w, frames.point_body_to_world(data, body_id, point_b)
+
+
+def wet_bottom(voxels, forces_w, gravity):
+    """배 바닥(가장 아래 층 칸) 중 물에 닿은 부분의 길이·넓이·위치 (몸체 좌표). 안 닿았으면 None.
+
+    활주 양력(planing_lift)과 바닥 마찰(bottom_friction)이 같이 쓴다.
+    칸이 얼마나 잠겼는지는 칸별 부력 ÷ (ρ · g · 칸 부피) 로 거꾸로 구한다 (부력 계산을 두 번 하지 않기).
+    젖은 깊이가 PLANING_WET_DEPTH 보다 얕은 칸은 그 비율만큼만 젖었다고 본다 (닿는 순간 힘이 튀지 않게).
+
+    돌려주는 dict
+      area   : 젖은 바닥 넓이 [m²]
+      length : 젖은 바닥 앞뒤 길이 [m] (젖은 칸 중 맨 뒤 ~ 맨 앞)
+      x_aft  : 젖은 바닥 뒤끝 x,  x_mid, y_mid : 젖은 넓이의 가운데,  z : 바닥면 높이
+    """
+    if gravity <= 0:
+        return None
+    centers_b, cell_size, cell_volume = voxels
+    z_low = centers_b[:, 2].min()
+    bottom = np.isclose(centers_b[:, 2], z_low)
+    wet_depth = forces_w[bottom, 2] / (config.Physics.RHO_WATER * gravity * cell_volume) * cell_size[2]
+    weight = np.clip(wet_depth / config.WaterParams.PLANING_WET_DEPTH, 0.0, 1.0)
+    if weight.sum() <= 0:
+        return None
+    xs = centers_b[bottom, 0][weight > 0]
+    return dict(area=float(weight.sum() * cell_size[0] * cell_size[1]),
+                length=float(xs.max() - xs.min() + cell_size[0]),
+                x_aft=float(xs.min() - cell_size[0] / 2),
+                x_mid=float(np.average(centers_b[bottom, 0], weights=weight)),
+                y_mid=float(np.average(centers_b[bottom, 1], weights=weight)),
+                z=float(z_low - cell_size[2] / 2))
+
+
+def friction_coefficient(speed, length):
+    """ITTC-1957 마찰 계수 Cf = 0.075 / (log10 Re − 2)²,  Re = 속도 × 길이 ÷ 동점성계수.
+
+    Re 가 너무 작으면 식이 터지므로(log10 Re → 2) FRICTION_RE_MIN 아래는 그 값으로 계산한다.
+    """
+    re = max(speed * length / config.WaterParams.WATER_KINEMATIC_VISCOSITY, config.WaterParams.FRICTION_RE_MIN)
+    return 0.075 / (math.log10(re) - 2.0) ** 2
+
+
+def bottom_friction(data, body_id, voxels, forces_w, gravity, vel_b):
+    """물에 닿은 바닥이 받는 마찰 저항 (월드 좌표 힘, 작용점). 힘이 없으면 (None, None).
+
+    F = ½ · ρ · |v|² · S · Cf,  방향은 바닥면을 따라 미끄러지는 속도의 반대 (2026-11-21, 동경 님 요청 2)
+      S = 젖은 바닥 넓이 (잠긴 부피가 아니라 "닿은 넓이" → 활주로 떠올라도 닿아 있는 한 남는다)
+      v = 몸체 x·y 방향 속도 (바닥면과 나란한 성분)
+    작용점 = 젖은 바닥 넓이의 가운데. 무게중심보다 아래라 뱃머리를 숙이는 돌림힘이 생긴다 (실제 배와 같음).
+    """
+    if not config.WaterParams.FRICTION_ENABLED:
+        return None, None
+    v_t = np.array([vel_b[0], vel_b[1], 0.0], dtype=float)
+    speed = float(np.linalg.norm(v_t))
+    if speed <= 0:
+        return None, None
+    wet = wet_bottom(voxels, forces_w, gravity)
+    if wet is None:
+        return None, None
+    cf = friction_coefficient(speed, wet['length'])
+    force_b = -0.5 * config.Physics.RHO_WATER * wet['area'] * cf * speed * v_t
+    point_b = (wet['x_mid'], wet['y_mid'], wet['z'])
+    return frames.body_to_world(data, body_id, force_b), frames.point_body_to_world(data, body_id, point_b)
+
+
+# ─────────────────────────────────────────────────────────────
 # 부가질량: 배가 속도를 바꾸면 주변 물도 같이 밀려서 배가 더 무겁게 움직인다
 # ─────────────────────────────────────────────────────────────
 # 기본값은 꺼져 있다 (config.WaterParams.ADDED_MASS_ENABLED 주석 참고).
@@ -386,15 +513,59 @@ def added_mass_force_w(data, body_id, accel_w, added_mass_b):
 
 
 # ─────────────────────────────────────────────────────────────
+# 파도 수면 표시 (화면 전용): 배를 따라다니는 높이맵(hfield) 패치
+# ─────────────────────────────────────────────────────────────
+# 파도는 부력·노즐 판정에는 들어가지만, 예전 수면 표시는 평평한 판 하나라 "배만 출렁이고 물은 가만히" 보였다
+# (2026-11-23 팀원 피드백). 파도가 있으면 격자 높이맵을 깔고, 화면 프레임마다 wave_height 로 높이를 채운다.
+#   - 물리에는 영향 없음: 접촉 끔(contype 0), worldbody 고정 geom 이라 질량도 없다.
+#   - 바다 전체(수백 m)를 촘촘히 깔면 프레임마다 계산이 무거워서 배 주변 50 m 만 깔고 배를 따라 옮긴다.
+#     옮길 때 격자 간격 단위로 끊어 옮겨야 물결이 미끄러져 보이지 않는다.
+#   - 가장자리 FADE 구간에서 파도를 평균 수면으로 줄여, 바깥 평평한 바다와 이어지게 한다.
+WAVE_SURFACE_GEOM = "water_wave_surface"    # 파도 수면 geom 이름 (hfield 도 같은 이름)
+WAVE_SURFACE_HALF = 25.0                    # 패치 반폭 [m] → 50 m × 50 m
+WAVE_SURFACE_STEP = 0.25                    # 격자 간격 [m]. 가장 짧은 기본 파장 2 m 를 8칸으로
+WAVE_SURFACE_FADE = 5.0                     # 가장자리에서 파도가 0 으로 줄어드는 폭 [m]
+WAVE_SURFACE_BASE = 0.05                    # 높이맵 밑판 두께 [m] (MuJoCo hfield 필수값, 화면에만 영향)
+
+
+def wave_amplitude(waves):
+    """파도 성분 진폭의 합 = 수면이 평균에서 오르내릴 수 있는 최대 높이 [m]."""
+    return float(sum(abs(amp) for amp, *_ in waves))
+
+
+def wave_surface_grid():
+    """패치 한 변의 칸 중심 좌표 (패치 가운데 기준) [m] 배열."""
+    n = int(round(2 * WAVE_SURFACE_HALF / WAVE_SURFACE_STEP)) + 1
+    return np.linspace(-WAVE_SURFACE_HALF, WAVE_SURFACE_HALF, n)
+
+
+def wave_surface_heights(center_xy, t, waves):
+    """패치 격자의 수면 높이 (nrow=y, ncol=x) [m]. 가장자리 FADE 구간은 평균 수면 쪽으로 줄인다."""
+    axis = wave_surface_grid()
+    gx, gy = np.meshgrid(center_xy[0] + axis, center_xy[1] + axis)   # 행 = y, 열 = x (MuJoCo hfield 순서)
+    edge = WAVE_SURFACE_HALF - np.maximum(np.abs(axis)[None, :], np.abs(axis)[:, None])
+    fade = np.clip(edge / WAVE_SURFACE_FADE, 0.0, 1.0)
+    surface = config.WaterParams.SURFACE_Z
+    return surface + fade * (wave_height(gx, gy, t, waves) - surface)
+
+
+# ─────────────────────────────────────────────────────────────
 # 물 모듈 본체
 # ─────────────────────────────────────────────────────────────
 class Water:
     # 요구사항은 config 한 곳에만 적고 여기서는 가져다 쓴다 (값을 두 곳에 두지 않기).
     REQUIRES = config.WaterParams.REQUIRES
 
-    def __init__(self, waves=config.WaterParams.WAVES_DEFAULT, *, floating_bodies=(), surface_visual=False, include_boat=True):
+    def __init__(self, waves=config.WaterParams.WAVES_DEFAULT, *, floating_bodies=(), surface_visual=False, include_boat=True,
+                 wave_visual=None):
+        """surface_visual: 수면을 화면에 그린다. 파도가 없으면 평평한 판, 파도가 있으면 출렁이는 패치.
+        wave_visual: 파도 패치만 따로 켜고 끈다. None 이면 surface_visual 을 따른다.
+          해안 맵처럼 넓은 평평한 바다를 직접 그리는 곳은 surface_visual=False, wave_visual=True 로 쓴다.
+        파도 패치는 화면 루프에서 update_surface_visual() 을 불러야 움직인다.
+        """
         self.waves = waves
         self.surface_visual = surface_visual
+        self.wave_visual = bool(waves) and (surface_visual if wave_visual is None else wave_visual)
         self.include_boat = include_boat
         # 사람·구명환의 실험 부력은 명시적으로 선택한다. 선체 부력은 기본 적용.
         self.floating_bodies = tuple(floating_bodies)
@@ -405,15 +576,51 @@ class Water:
         return wave_height(x, y, t, self.waves)
 
     def build(self, spec):
-        """선택한 수면 표시는 접촉·질량이 없는 평면이다 (파도 변형은 미표시)."""
-        if self.surface_visual:
-            import mujoco
+        """선택한 수면 표시는 접촉·질량이 없다. 파도가 있으면 높이맵 패치, 없으면 평면."""
+        import mujoco
+        group = 0 if config.Groups.VISUAL is None else config.Groups.VISUAL
+        if self.wave_visual:
+            # 높이 = geom 높이 + 값(0~1) × top. 가장 낮은 골(평균 − 진폭합)을 0, 가장 높은 마루를 1 로 둔다
+            amp = max(wave_amplitude(self.waves), 1e-3)
+            n = len(wave_surface_grid())
+            spec.add_hfield(name=WAVE_SURFACE_GEOM, nrow=n, ncol=n, userdata=[0.5] * (n * n),
+                            size=[WAVE_SURFACE_HALF, WAVE_SURFACE_HALF, 2 * amp, WAVE_SURFACE_BASE])
+            spec.worldbody.add_geom(name=WAVE_SURFACE_GEOM, type=mujoco.mjtGeom.mjGEOM_HFIELD,
+                                    hfieldname=WAVE_SURFACE_GEOM,
+                                    pos=[0, 0, config.WaterParams.SURFACE_Z - amp],
+                                    rgba=[.06, .32, .45, .6], contype=0, conaffinity=0, group=group)
+        if self.surface_visual and not self.wave_visual:
             spec.worldbody.add_geom(name=config.Names.WATER_SURFACE_GEOM,
                                     type=mujoco.mjtGeom.mjGEOM_PLANE,
                                     pos=[0, 0, config.WaterParams.SURFACE_Z], size=[50, 50, .1],
-                                    rgba=[.06, .32, .45, .4], contype=0, conaffinity=0,
-                                    group=0 if config.Groups.VISUAL is None else config.Groups.VISUAL)
+                                    rgba=[.06, .32, .45, .4], contype=0, conaffinity=0, group=group)
+        if self.surface_visual:
             spec.worldbody.add_light(pos=[0, 0, 8], dir=[0, 0, -1], diffuse=[.7, .7, .7])
+
+    def update_surface_visual(self, model, data, viewer=None, center_xy=None):
+        """파도 수면 패치를 지금 시각(data.time)의 파도 높이로 채운다. 화면 프레임마다 부른다.
+
+        center_xy: 패치 가운데 (x, y). None 이면 배 위치 (배가 없으면 원점). 격자 간격 단위로 맞춘다.
+        viewer: mujoco.viewer 핸들을 주면 바뀐 높이맵을 화면에 올린다 (viewer.update_hfield).
+          높이 값은 viewer.lock() 안에서 바꾸고, 이 함수는 lock 밖에서 viewer 와 함께 부르는 것을 권장.
+        돌려주는 값: 높이맵 번호 (화면에 올릴 때 viewer.update_hfield 에 넘김). 파도 패치가 없으면 None.
+        """
+        if self._wave_hfield is None:
+            return None
+        if center_xy is None:
+            center_xy = (0.0, 0.0) if self.body_id is None else data.xpos[self.body_id][:2]
+        center = np.round(np.asarray(center_xy, dtype=float) / WAVE_SURFACE_STEP) * WAVE_SURFACE_STEP
+        hfield_id, geom_id = self._wave_hfield
+        heights = wave_surface_heights(center, data.time, self.waves)
+        low = model.geom_pos[geom_id][2]
+        top = model.hfield_size[hfield_id][2]
+        adr, count = model.hfield_adr[hfield_id], model.hfield_nrow[hfield_id] * model.hfield_ncol[hfield_id]
+        model.hfield_data[adr:adr + count] = np.clip((heights - low) / top, 0.0, 1.0).ravel()
+        model.geom_pos[geom_id][:2] = center
+        data.geom_xpos[geom_id][:2] = center     # 다음 mj_forward 전에도 화면에 바로 반영
+        if viewer is not None:
+            viewer.update_hfield(hfield_id)
+        return int(hfield_id)
 
     def bind(self, model):
         """선체 복셀과 명시한 고정 연결 몸체의 합집합 복셀을 준비한다."""
@@ -421,6 +628,11 @@ class Water:
         import mujoco
 
         self.targets = []
+        # 파도 수면 패치 (hfield 번호, geom 번호). 없으면 None
+        self._wave_hfield = None
+        if self.wave_visual:
+            self._wave_hfield = (mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_HFIELD, WAVE_SURFACE_GEOM),
+                                 mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, WAVE_SURFACE_GEOM))
         # 부가질량 (선체만). 꺼져 있으면 None. 켜져 있으면 bind 때 축별 부가질량을 한 번 계산
         self.added_mass_b = None
         self._prev_vel = None   # (시각, 월드 속도): 가속도 = 속도 차이 ÷ 시간 간격 을 구하려고 기억
@@ -522,6 +734,18 @@ class Water:
             #   무게중심에 걸면, 무게중심보다 아래(선체 바닥)를 미는 추진기가 선수를 드는 돌림힘을
             #   상쇄하는 힘이 없어 고속에서 선수가 계속 들렸다. 중력 0 등으로 부력 중심이 없으면 무게중심.
             acc.add(body_id, force_w, torque_w=torque_w, point_w=center_w)
+
+            # 활주 양력은 배에만 (Savitsky 식은 배 바닥 같은 판 모양 기준. 사람·구명환에는 맞지 않음)
+            if body_id == self.body_id:
+                vel_w, _ = frames.body_velocity_w(model, data, body_id)
+                vel_b = frames.world_to_body(data, body_id, vel_w - current)
+                lift_w, lift_point_w = planing_lift(data, body_id, target['voxels'], forces_w, gravity, vel_b)
+                if lift_w is not None:
+                    acc.add(body_id, lift_w, point_w=lift_point_w)
+                # 젖은 바닥 마찰: 떠올라도 바닥이 닿아 있는 한 저항이 남게 (동경 님 요청 2)
+                fric_w, fric_point_w = bottom_friction(data, body_id, target['voxels'], forces_w, gravity, vel_b)
+                if fric_w is not None:
+                    acc.add(body_id, fric_w, point_w=fric_point_w)
 
             # 부가질량도 감쇠처럼 물 밖으로 나오면 줄어든다 (같이 밀 물이 없으므로)
             if body_id == self.body_id and accel_w is not None:

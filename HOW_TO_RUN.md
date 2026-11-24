@@ -7,6 +7,20 @@
 
 자세한 내용은 노션 "03. 개발 환경 & 실행 가이드"를 기준으로 합니다.
 
+## 전체 시나리오 (메인 실행)
+
+지상에 대기한 배가 출항한 뒤, 익수자 좌표를 GPS로 자동 찍어 그쪽으로 항해합니다.
+GPS 수동 입력은 아직 없고, 발견자가 배를 띄우는 연출은 수면 배치로 대체합니다.
+
+```bash
+conda activate rescue
+python -m sim.run_sim                 # MuJoCo 창으로 시뮬레이션 표시 (기본)
+python -m sim.run_sim --victim-range 200 --launch-delay 3
+# 창 없이 로그만: python -m sim.run_sim --headless
+```
+
+`--headless`를 붙이면 화면이 안 나오고 로그만 출력됩니다. 창이 안 뜨면 `MUJOCO_GL=glfw python -m sim.run_sim`을 쓰세요.
+
 ## 설치 (처음 한 번)
 
 ```bash
@@ -101,7 +115,7 @@ python -m sim.world.view_human
 
 ## 로프 견인 시험 보기
 
-> 이 시험은 사람이 구명환을 이미 왼손에 쥐었다고 가정하고 견인 단계만 떼어 본 것입니다. 구명환은 몸에 끼우지 않습니다(2026-11-19 착용 삭제). 실제 흐름은 배가 줄+구명환을 건네주고 사람이 손으로 잡은 뒤 견인합니다.
+> 이 시험은 사람이 구명환을 이미 왼손에 쥐었다고 가정하고 견인 단계만 떼어 본 것입니다. 처음부터 몸에 끼운 상태로는 시작하지 않습니다. 실제 흐름은 배가 줄+구명환을 건네주고 사람이 손으로 잡거나, 잡은 뒤 스스로 착용(`view_wear`)한 다음 견인합니다.
 
 ```bash
 source .venv/bin/activate
@@ -139,7 +153,7 @@ python -m pytest tests/world/test_tether.py -v
 
 ## 물 위에서 배가 사람을 견인하는 시험
 
-> 이 시험은 사람이 구명환을 이미 왼손에 쥐었다고 가정하고 견인 단계만 떼어 본 것입니다. 구명환은 몸에 끼우지 않습니다(2026-11-19 착용 삭제). 실제 흐름은 배가 줄+구명환을 건네주고 사람이 손으로 잡은 뒤 견인합니다.
+> 이 시험은 사람이 구명환을 이미 왼손에 쥐었다고 가정하고 견인 단계만 떼어 본 것입니다. 처음부터 몸에 끼운 상태로는 시작하지 않습니다. 실제 흐름은 배가 줄+구명환을 건네주고 사람이 손으로 잡거나, 잡은 뒤 스스로 착용(`view_wear`)한 다음 견인합니다.
 
 ```bash
 python -m sim.world.view_towing
@@ -446,8 +460,34 @@ mujoco.mj_forward(world.model, world.data)
 
 조립 순서는 사람·독립 구명환의 site 생성 뒤 `HumanGrasp.build`, compile, bind입니다.
 새 에피소드에서는 `mj_resetData` 뒤 `HumanGrasp.reset(model, data)`로 참조 자세도 초기화합니다.
-구명환 착용(`attached=True`)은 삭제했습니다. 전달 흐름에서는 `Lifebuoy(grip_sites=True)`를,
+처음부터 끼운 착용(`attached=True`)은 쓰지 않습니다. 전달 흐름에서는 `Lifebuoy(grip_sites=True)`를,
 처음부터 쥔 시험은 `Lifebuoy(held_by=human)` + `HumanGrasp(held=True)`를 씁니다. 기존 `view_rescue`의 배 제어·Watchdog에는 아직 합치지 않았습니다.
+
+## 사람이 스스로 구명환을 끼는 시험
+
+```bash
+source .venv/bin/activate
+python -m sim.world.view_wear
+python -m sim.world.view_wear --headless
+python -m pytest tests/world/test_wear.py -q
+```
+
+> 2026-11-19에 삭제했다가 2026-11-23 되살렸습니다. 처음부터 끼운 상태로 시작하지 않고, 구명환을 받은 뒤 사람이 스스로 끼는 흐름입니다.
+
+구명환을 정면에 전달받은 상태에서 약 14초 동안 **양팔을 곧게 뻗어 동시에 통과**시킵니다.
+배의 탑재·전달 동작은 포함하지 않는 **중력 0의 관절·접근 동작 시험**입니다.
+
+1. `WAITING`: 사람과 구명환은 독립 강체이며, 로프는 환에 연결되어 있습니다.
+2. `ALIGN_ARMS`: 전달 완료 신호를 받으면 양어깨를 동시에 돌려 팔을 나란히 뻗습니다. 팔꿈치와 손목의 목표 각도는 계속 0도입니다.
+3. `INSERT_BOTH`: 환을 전달 위치에 지지하고 사람이 앞으로 접근합니다. 양손과 팔, 머리가 환의 구멍을 지나 몸통에 환이 도달합니다.
+4. `WORN`: 실제 양팔 자세와 환의 정렬을 확인하고 몸통 착용 지지를 켭니다. 접근 시험 장치의 지지를 모두 해제하며, 팔은 계속 뻗어 있습니다.
+
+`WearApproachFixture`는 시연 전용 외력 제어 장치입니다. 환을 건네는 위치에 지지하고 사람의 접근 이동을 재현합니다.
+배 제어나 실제 수영 추진력 모델이 아니며, 실제 통합에서는 전달부·사람 이동 제어로 대체해야 합니다.
+착용 후 힘은 몸통↔환의 weld 지지 근사로 전달됩니다. 겨드랑이 접촉·마찰 전체를 재현하는 모델은 아닙니다.
+`SelfWear.measurements(data)['ready_to_tow']`가 True일 때 견인을 시작하세요.
+기본(medium) 인체 형상과 정면 전달 배치에 맞춘 순서 제어이며, 수상 착용·다른 몸집·임의 자세의 충돌 회피는 검증하지 않았습니다.
+headless는 50초 안에 착용이 완료되어야 성공합니다.
 
 ## 월미도 해안 구조 시나리오 (환경 3개)
 
@@ -486,10 +526,25 @@ python -m sim.world.view_contact --side side --push  # 정지 상태에서 최�
 옆에서 밀면 배가 마찰로 회전해 사람 둘레를 닿은 채 돌아가는데, 이는 관통이 아닌 정상 물리입니다.
 화면 없이 확인하려면 `--headless`를 붙입니다. 같은 장면의 자동 검사는 `python -m pytest tests/world/test_contact.py -v`입니다.
 
-## 잡기 시연의 코드 위치
+## 하나개 해수욕장 참고 맵 (육지·바다·배)
 
-실행 명령은 `python -m sim.world.view_grasp`로 유지합니다. 구명환 착용 시연(`view_wear`)은 2026-11-19 삭제했습니다.
-`sim/world/scenarios.py`에는 GraspDemo와 시험용 PullFixture가 있습니다.
+육지는 맵 **동쪽 끝**에 붙이고, 익수자는 해안에서 약 **200m** 서쪽 바다에 둡니다.
+배는 해안 근처에서 익수자 쪽을 봅니다. 물은 `Water` 부력·저항을 쓰고, 넓은 수면 표시는 맵이 그립니다.
+
+```bash
+source .venv/bin/activate
+python -m sim.world.view_hanagae
+python -m sim.world.view_hanagae --headless
+python -m sim.world.view_hanagae --waves
+python -m pytest tests/world/test_coast_map.py -q
+```
+
+지면은 수면 아래까지 내려 붙여 떠 보이지 않게 했습니다. 육지 충돌 비트·밀물 수면 상승·실측 GIS는 없습니다.
+
+## 잡기·착용 시연의 코드 위치
+
+실행 명령은 `python -m sim.world.view_grasp`, `python -m sim.world.view_wear`입니다.
+`sim/world/scenarios.py`에는 GraspDemo·WearDemo와 시험용 PullFixture·WearApproachFixture가 있습니다. 착용 동작은 `sim/world/wear.py`(`SelfWear`)입니다.
 자동 테스트는 뷰 대신 이 장면을 직접 사용합니다. `view_*.py`는 실행 옵션·화면·카메라를 담당합니다.
 공통 물리 적분은 `world.advance_world`, 로프 표시는 `rope_visual.draw_rope`를 사용합니다.
 시연별 제어 갱신·반복 리셋과 구조 단계의 Watchdog 실행 순서는 각 호출 측에서 유지합니다.

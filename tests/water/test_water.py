@@ -822,3 +822,215 @@ def test_drag_acts_at_center_of_buoyancy():
     buoyancy, drag = loads[0], loads[1]
     assert buoyancy[3] is not None
     np.testing.assert_allclose(drag[3], buoyancy[3])
+
+
+# ─────────────────────────────────────────────────────────────
+# 고속 활주 양력 (2026-11-21, 동경 님 요청 1)
+# ─────────────────────────────────────────────────────────────
+def _pitched_boat_buoyancy(trim_deg):
+    """잔잔한 물의 배를 뱃머리 trim_deg 만큼 들고, 그 자세의 칸별 부력을 돌려준다."""
+    world, water_part, robot = _sim_world()
+    adr = robot.qpos_adr
+    half = math.radians(-trim_deg) / 2               # y 축(왼쪽) 둘레 음수 회전 = 뱃머리가 들림
+    world.data.qpos[adr + 3:adr + 7] = (math.cos(half), 0, math.sin(half), 0)
+    mujoco.mj_forward(world.model, world.data)
+    voxels = water_part.targets[0]['voxels']
+    forces_w, _, _ = water.voxel_buoyancy(world.data, robot.body_id, waves=CALM, voxels=voxels,
+                                          gravity=config.Physics.GRAVITY)
+    return world, robot, voxels, forces_w
+
+
+def _lift(trim_deg, speed, vz=0.0):
+    # 세상 기준으로 앞(+x)으로 speed, 위로 vz 움직이는 배. planing_lift 는 몸체 좌표 속도를 받으므로 돌려서 넘김
+    from sim import frames
+    world, robot, voxels, forces_w = _pitched_boat_buoyancy(trim_deg)
+    vel_b = frames.world_to_body(world.data, robot.body_id, np.array([speed, 0.0, vz]))
+    return water.planing_lift(world.data, robot.body_id, voxels, forces_w, config.Physics.GRAVITY, vel_b)
+
+
+@pytest.mark.parametrize("trim_deg, speed", [(3.0, 0.0), (3.0, -2.0), (0.0, 5.0), (-3.0, 5.0)])  # vz = 0
+def test_planing_lift_needs_forward_speed_and_bow_up(trim_deg, speed):
+    # 멈춰 있거나, 뒤로 가거나, 뱃머리가 들리지 않으면 활주 양력은 없다 → 정지 흘수·평형 테스트에 영향 없음
+    force_w, point_w = _lift(trim_deg, speed)
+    assert force_w is None and point_w is None
+
+
+def test_planing_lift_grows_with_speed_squared():
+    # 같은 자세에서 속도 2배 → 양력 4배 (L ∝ V²)
+    slow, _ = _lift(3.0, 3.0)
+    fast, _ = _lift(3.0, 6.0)
+    assert slow[2] > 0
+    assert fast[2] == pytest.approx(4.0 * slow[2], rel=1e-9)
+
+
+def test_planing_lift_is_normal_to_bottom_and_gives_induced_drag():
+    # 힘은 바닥에 수직 → 뱃머리를 들면 수평 성분이 뒤(−x)를 향한다 = 유도 저항 L · tan τ
+    trim = 4.0
+    force_w, point_w = _lift(trim, 5.0)
+    assert force_w[0] < 0
+    assert -force_w[0] == pytest.approx(force_w[2] * math.tan(math.radians(trim)), rel=1e-9)
+    # 작용점은 배 바닥 높이 근처 (바닥면에 건다)
+    assert point_w is not None and np.isfinite(point_w).all()
+
+
+def test_planing_lift_can_be_turned_off(monkeypatch):
+    monkeypatch.setattr(config.WaterParams, "PLANING_ENABLED", False)
+    force_w, point_w = _lift(3.0, 5.0)
+    assert force_w is None and point_w is None
+
+
+# ─────────────────────────────────────────────────────────────
+# 젖은 바닥 마찰 (2026-11-21, 동경 님 요청 2: 떠올라도 저항이 사라지지 않게)
+# ─────────────────────────────────────────────────────────────
+def _friction(lift=0.0, vel_b=(3.0, 0.0, 0.0)):
+    world, water_part, robot = _sim_world(lift=lift)
+    voxels = water_part.targets[0]['voxels']
+    forces_w, _, volume = water.voxel_buoyancy(world.data, robot.body_id, waves=CALM, voxels=voxels,
+                                               gravity=config.Physics.GRAVITY)
+    force_w, point_w = water.bottom_friction(world.data, robot.body_id, voxels, forces_w,
+                                             config.Physics.GRAVITY, np.array(vel_b, dtype=float))
+    return force_w, point_w, water.wet_bottom(voxels, forces_w, config.Physics.GRAVITY), volume
+
+
+def test_friction_coefficient_matches_ittc_line():
+    # Re = 1e7 → Cf = 0.075 / (7 − 2)² = 0.003
+    length = 1.0
+    speed = 1.0e7 * WaterParams.WATER_KINEMATIC_VISCOSITY / length
+    assert water.friction_coefficient(speed, length) == pytest.approx(0.003, rel=1e-9)
+    # 아주 느려도 식이 터지지 않음 (FRICTION_RE_MIN 으로 계산)
+    assert np.isfinite(water.friction_coefficient(1e-6, length))
+
+
+def test_bottom_friction_opposes_sliding_with_hand_value():
+    force_w, point_w, wet, _ = _friction(vel_b=(3.0, 0.0, 0.0))
+    cf = water.friction_coefficient(3.0, wet['length'])
+    expected = 0.5 * config.Physics.RHO_WATER * 3.0 ** 2 * wet['area'] * cf
+    assert force_w[0] == pytest.approx(-expected, rel=1e-9)   # 앞으로 가면 뒤로
+    assert abs(force_w[1]) < 1e-9 and abs(force_w[2]) < 1e-9
+    assert point_w is not None
+
+
+def test_bottom_friction_stays_when_boat_lifts():
+    # 핵심 회귀 시험: 배를 1.2 cm 들어 올려 잠긴 부피가 줄어도, 바닥이 닿아 있는 한 마찰은 그대로.
+    #   (DRAG_CD 2차 저항은 잠긴 비율만큼 줄어 떠오르면 0 으로 간다 → 그것만으로는 저항이 사라졌음)
+    rest, _, _, vol_rest = _friction()
+    lifted, _, _, vol_lifted = _friction(lift=0.012)
+    assert vol_lifted < 0.6 * vol_rest
+    assert lifted[0] == pytest.approx(rest[0], rel=1e-9)
+
+
+def test_bottom_friction_zero_at_rest_or_out_of_water_or_off(monkeypatch):
+    assert _friction(vel_b=(0.0, 0.0, 0.0))[0] is None             # 멈춰 있으면 없음
+    assert _friction(lift=0.5)[0] is None                            # 물 밖이면 없음
+    monkeypatch.setattr(config.WaterParams, "FRICTION_ENABLED", False)
+    assert _friction()[0] is None
+
+
+def test_planing_lift_damps_heave():
+    # 300 N 출렁임 보완 (2026-11-21): 받음각 α = τ − atan(vz / V)
+    #   내려앉는 중(vz < 0)이면 더 세게, 떠오르는 중(vz > 0)이면 약하게 받친다 → 위아래 움직임을 멈추게 함
+    steady, _ = _lift(2.0, 8.0)
+    falling, _ = _lift(2.0, 8.0, vz=-0.2)
+    rising, _ = _lift(2.0, 8.0, vz=+0.2)
+    assert rising[2] < steady[2] < falling[2]
+    # 배 앞축을 따라 미끄러지면(받음각 0) 양력 없음
+    along_keel, _ = _lift(2.0, 8.0, vz=8.0 * math.tan(math.radians(2.0)))
+    assert along_keel is None or np.linalg.norm(along_keel) < 1e-9   # 반올림 오차로 아주 작은 값이 남을 수 있음
+    # 뱃머리가 숙여져 있어도 빠르게 내려앉으면 바닥이 물을 쳐서 받친다
+    assert _lift(-1.0, 8.0, vz=-0.5)[0] is not None
+
+
+# ─────────────────────────────────────────────────────────────
+# 파도 수면 표시 (화면 전용 높이맵 패치)
+# ─────────────────────────────────────────────────────────────
+WAVES = WaterParams.WAVES_DEFAULT
+
+
+def _ray_down(world, x, y):
+    """(x, y) 위 5 m 에서 아래로 쏜 광선이 처음 닿는 높이와 geom 번호."""
+    geom = np.zeros(1, np.int32)
+    dist = mujoco.mj_ray(world.model, world.data, np.array([x, y, 5.0]), np.array([0.0, 0.0, -1.0]),
+                         None, 1, -1, geom)
+    return 5.0 - dist, int(geom[0])
+
+
+def test_calm_surface_visual_stays_flat_plane():
+    # 파도가 없으면 예전과 같은 평면, 높이맵 없음 → update 는 아무것도 안 함
+    world = build_world(parts=(Water(waves=CALM, surface_visual=True), Robot()))
+    water_part = world.parts[0]
+    model = world.model
+    assert model.geom(config.Names.WATER_SURFACE_GEOM).type == mujoco.mjtGeom.mjGEOM_PLANE
+    assert model.nhfield == 0
+    assert water_part.update_surface_visual(model, world.data) is None
+
+
+def test_wave_surface_visual_follows_wave_height():
+    # 파도가 있으면 평면 대신 높이맵. 패치 안쪽 아무 점이나 위에서 광선을 쏘면 그 시각의 파도 높이에 닿는다
+    world = build_world(parts=(Water(waves=WAVES, surface_visual=True), Robot()))
+    water_part, robot = world.parts
+    model, data = world.model, world.data
+    assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, config.Names.WATER_SURFACE_GEOM) == -1
+    data.time = 3.7
+    hfield = water_part.update_surface_visual(model, data)
+    assert hfield == model.hfield(water.WAVE_SURFACE_GEOM).id
+    mujoco.mj_forward(model, data)
+    boat = data.xpos[robot.body_id]
+    surface_geom = model.geom(water.WAVE_SURFACE_GEOM).id
+    for dx, dy in [(5.0, 0.0), (-7.3, 4.1), (0.6, -12.2), (15.0, 15.0)]:
+        x, y = boat[0] + dx, boat[1] + dy
+        z, geom = _ray_down(world, x, y)
+        assert geom == surface_geom
+        assert z == pytest.approx(water.wave_height(x, y, data.time, WAVES), abs=0.01)   # 격자 보간 오차 1 cm 이내
+
+
+def test_wave_surface_visual_follows_boat_on_grid():
+    # 패치 가운데는 배 위치를 격자 간격으로 맞춘 곳 (물결이 미끄러져 보이지 않게)
+    world = build_world(parts=(Water(waves=WAVES, surface_visual=True), Robot()))
+    water_part, robot = world.parts
+    world.data.qpos[robot.qpos_adr:robot.qpos_adr + 2] = (12.34, -5.67)
+    mujoco.mj_forward(world.model, world.data)
+    water_part.update_surface_visual(world.model, world.data)
+    center = world.model.geom(water.WAVE_SURFACE_GEOM).pos[:2]
+    step = water.WAVE_SURFACE_STEP
+    assert np.allclose(center / step, np.round(center / step))
+    assert np.all(np.abs(center - world.data.xpos[robot.body_id][:2]) <= step / 2 + 1e-9)
+
+
+def test_wave_surface_edge_fades_to_mean_level():
+    # 패치 가장자리는 평균 수면 → 바깥 평평한 바다와 이어진다
+    heights = water.wave_surface_heights((3.0, -2.0), 1.3, WAVES)
+    surface = WaterParams.SURFACE_Z
+    for edge in (heights[0], heights[-1], heights[:, 0], heights[:, -1]):
+        assert np.allclose(edge, surface)
+    assert np.ptp(heights) > 0.05                           # 가운데는 실제로 출렁인다
+
+
+def test_wave_surface_visual_does_not_change_forces():
+    # 화면 전용: 같은 상태에서 물이 배에 주는 힘은 패치를 켜든 끄든 같다
+    def forces(visual):
+        world = build_world(parts=(Water(waves=WAVES, surface_visual=visual), Robot()))
+        water_part = world.parts[0]
+        world.data.time = 2.0
+        water_part.update_surface_visual(world.model, world.data)
+        mujoco.mj_forward(world.model, world.data)
+        world.acc.reset()
+        water_part.add_forces(world.model, world.data, world.acc)
+        world.acc.apply(world.model, world.data)
+        return world.data.xfrc_applied.copy()
+    assert np.allclose(forces(True), forces(False))
+
+
+def test_coast_map_lowers_flat_sea_below_wave_troughs():
+    # 해안 맵: 파도가 있으면 평평한 바다 판 윗면이 가장 낮은 골보다 아래 → 파도 수면을 가리지 않음
+    from sim.world.coast_map import build_hanagae_world
+    for waves, has_patch in ((CALM, False), (WAVES, True)):
+        world, *_ = build_hanagae_world(waves=waves)
+        model = world.model
+        sea = model.geom('hanagae_water_surface')
+        top = sea.pos[2] + sea.size[2]
+        assert (mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, water.WAVE_SURFACE_GEOM) >= 0) == has_patch
+        if has_patch:
+            assert top < WaterParams.SURFACE_Z - water.wave_amplitude(waves)
+        else:
+            assert top == pytest.approx(WaterParams.SURFACE_Z + .05)
+

@@ -129,10 +129,12 @@
   착수 잡는 점–손 거리 0.05m(파도 0.21m), 사람 진행 약 6.1m. 이전의 '끌고 가서 줄 풀기' 방식(`wolmido_mission.py`)은 삭제.
 - 해류(썰물 흐름) 환경은 물 담당(`Owner.CURRENT`)의 해류 지원 후 추가합니다.
 
-## 구명환 착용 삭제 (2026-11-19, 가영)
+## 구명환 착용 — 처음부터 끼운 상태 삭제, 스스로 착용은 유지 (2026-11-19 · 11/23 정정, 가영)
 
-- 구명환은 사람 몸에 끼우지 않습니다. 착용 weld(`human_ring_worn`)·`Lifebuoy(attached=True)`·`POSITION_IN_HUMAN_B`,
-  양팔 착용(`SelfWear`·`wear.py`·`view_wear.py`·`WearDemo`·`WearApproachFixture`)을 삭제했습니다. 아래 절의 착용 관련 설명은 지난 기록입니다.
+- 처음부터 몸에 끼운 상태(`Lifebuoy(attached=True)`)로는 시작하지 않습니다 (2026-11-19 삭제).
+- **2026-11-23 정정**: 11/19에 양팔 착용(`SelfWear`·`wear.py`·`view_wear.py`·`WearDemo`·`WearApproachFixture`)과
+  `POSITION_IN_HUMAN_B`까지 지웠는데, 시나리오 5-1 "익수자가 구명환을 잡거나 몸에 끼운다"에 맞게 **11/19 이전 코드 그대로 되살렸습니다**
+  (파일 위치만 `sim/world/`, `tests/world/`). 손으로 잡은 뒤 스스로 착용하면 착용 weld(`human_ring_worn`)가 켜집니다.
 - 사람↔구명환 연결은 손 잡기(`HumanGrasp`)만 씁니다. 처음부터 쥔 시험은 `Human(grip_sites=True)` →
   `Lifebuoy(held_by=human)` → `HumanGrasp(held=True)`로 조립합니다. 환은 왼손 잡기점 옆 2cm에 놓이고,
   잡기 weld는 켜진 채 시작해 `mj_resetData` 뒤에도 켜진 상태로 돌아옵니다. 손 기준 로프 연결점은 `Lifebuoy.held_tow_point_b()`.
@@ -506,6 +508,21 @@ small은 ANSUR II 여성 하위 5%(152.5cm·51.3kg), large는 남성 상위 5%(1
   (전진 힘 상한 = 추진기 2대 합, 속도 이득 300N/(m/s)), 안에서는 `near_speed` 1.2m/s.
   멀리서 들어오는 중에는 첫 경유점과 같은 방향이어도 지난 것으로 보지 않습니다.
 - `view_launch` 기본 출발은 사람에게서 50m. 측정: 최고 4.0m/s, 22.2초에 발사, 착수 오차 0.05m.
+
+## 하나개 해안 맵 시연 (2026-11-19)
+
+- `CoastalMap`은 세계 조립 담당의 시각용 해안 맵이다. `Water`의 부력은 재사용하고, 넓은 수면 표시는
+  맵이 그린다(`Water(surface_visual=False, wave_visual=True)`). 맵 geom은 `Groups.VISUAL`·비접촉만 사용한다.
+- 파도가 켜져 있으면(`--waves`) 배 주변 50 m 출렁이는 수면은 `Water`가 높이맵으로 그린다 (2026-11-23).
+  화면 루프에서 `Water.update_surface_visual()`을 불러야 움직이며(`run_sim`에 연결), 접촉이 없어 물리에는
+  영향이 없다. 이때 맵은 평평한 바다 판·갯벌 윗면을 가장 낮은 파도 골 아래로 내려 파도 수면을 가리지 않는다
+  (`CoastalMap(wave_amplitude=...)`). 파도가 없으면 맵의 평평한 바다 판만 보인다.
+- 육지는 맵 동쪽 끝에 붙이고 수면 아래까지 내려 띄우지 않는다. 익수자는 해안에서 약 200m 서쪽,
+  배는 해안 근처에서 익수자 쪽을 본다. 실측 좌표·밀물 수면 상승·배·육지 충돌은 후속 작업이다.
+- 실행: `python -m sim.world.view_hanagae`. 조립 검사는 `tests/world/test_coast_map.py`.
+- 전체 틀 실행은 `python -m sim.run_sim`이다. 배는 모래사장에서 시작하고, 출항 후 익수자
+  수평 좌표를 GPS 목표로 자동 표기한 뒤 `PhaseManager`로 항해한다. 육지 충돌이 없어 대기 중
+  배 자세는 시나리오가 붙잡는다. GPS 기기 입력·운반 연출은 후속이다.
 
 ## 최신 main 선체 통합 (2026-11-13)
 
