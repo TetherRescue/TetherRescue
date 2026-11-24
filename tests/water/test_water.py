@@ -941,17 +941,9 @@ def test_planing_lift_damps_heave():
 
 
 # ─────────────────────────────────────────────────────────────
-# 파도 수면 표시 (화면 전용 높이맵 패치)
+# 파도 수면 표시 (화면 전용 격자 메시 패치)
 # ─────────────────────────────────────────────────────────────
 WAVES = WaterParams.WAVES_DEFAULT
-
-
-def _ray_down(world, x, y):
-    """(x, y) 위 5 m 에서 아래로 쏜 광선이 처음 닿는 높이와 geom 번호."""
-    geom = np.zeros(1, np.int32)
-    dist = mujoco.mj_ray(world.model, world.data, np.array([x, y, 5.0]), np.array([0.0, 0.0, -1.0]),
-                         None, 1, -1, geom)
-    return 5.0 - dist, int(geom[0])
 
 
 def test_calm_surface_visual_stays_flat_plane():
@@ -964,23 +956,60 @@ def test_calm_surface_visual_stays_flat_plane():
     assert water_part.update_surface_visual(model, world.data) is None
 
 
+def _surface_mesh_w(model, data, mesh_id):
+    """파도 수면 메시의 월드 꼭짓점·법선 (MuJoCo 가 옮기고 돌려 둔 메시 좌표를 geom 자세로 되돌림)."""
+    geom = model.geom(water.WAVE_SURFACE_GEOM).id
+    rot, pos = data.geom_xmat[geom].reshape(3, 3), data.geom_xpos[geom]
+    vert = slice(model.mesh_vertadr[mesh_id], model.mesh_vertadr[mesh_id] + model.mesh_vertnum[mesh_id])
+    normal = slice(model.mesh_normaladr[mesh_id], model.mesh_normaladr[mesh_id] + model.mesh_normalnum[mesh_id])
+    return model.mesh_vert[vert] @ rot.T + pos, model.mesh_normal[normal] @ rot.T
+
+
 def test_wave_surface_visual_follows_wave_height():
-    # 파도가 있으면 평면 대신 높이맵. 패치 안쪽 아무 점이나 위에서 광선을 쏘면 그 시각의 파도 높이에 닿는다
+    # 파도가 있으면 평면 대신 윗면만 있는 격자 메시 (높이맵은 옆면 벽이 반투명 물 너머로 선처럼 보였다).
+    # 꼭짓점 높이 = 그 시각의 파도 높이 (가장자리 줄임 포함), 법선 = 그 자리 수면 기울기
     world = build_world(parts=(Water(waves=WAVES, surface_visual=True), Robot()))
     water_part, robot = world.parts
     model, data = world.model, world.data
     assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, config.Names.WATER_SURFACE_GEOM) == -1
+    assert model.nhfield == 0
     data.time = 3.7
-    hfield = water_part.update_surface_visual(model, data)
-    assert hfield == model.hfield(water.WAVE_SURFACE_GEOM).id
+    mesh_id = water_part.update_surface_visual(model, data)
+    assert mesh_id == model.mesh(water.WAVE_SURFACE_GEOM).id
     mujoco.mj_forward(model, data)
-    boat = data.xpos[robot.body_id]
-    surface_geom = model.geom(water.WAVE_SURFACE_GEOM).id
-    for dx, dy in [(5.0, 0.0), (-7.3, 4.1), (0.6, -12.2), (15.0, 15.0)]:
-        x, y = boat[0] + dx, boat[1] + dy
-        z, geom = _ray_down(world, x, y)
-        assert geom == surface_geom
-        assert z == pytest.approx(water.wave_height(x, y, data.time, WAVES), abs=0.01)   # 격자 보간 오차 1 cm 이내
+    verts, normals = _surface_mesh_w(model, data, mesh_id)
+    center = verts[:, :2].mean(axis=0)
+    heights = water.wave_surface_heights(center, data.time, WAVES).ravel()
+    assert np.allclose(verts[:, 2], heights, atol=1e-5)                       # float32 저장 오차 이내
+    inner = np.all(np.abs(verts[:, :2] - center) < water.WAVE_SURFACE_HALF - water.WAVE_SURFACE_FADE, axis=1)
+    sx, sy = water.wave_slope(verts[inner, 0], verts[inner, 1], data.time, WAVES)
+    expected = np.stack([-sx, -sy, np.ones_like(sx)], axis=1)
+    expected /= np.linalg.norm(expected, axis=1, keepdims=True)
+    assert np.allclose(normals[inner], expected, atol=1e-5)
+    assert np.all(normals[:, 2] > 0.9)                                         # 모두 위를 본다
+
+
+def test_wave_slope_matches_finite_difference(monkeypatch):
+    # 법선에 쓰는 기울기 = wave_height 를 수치 미분한 값. 가장자리 줄임 띠의 기울기도 높이와 맞아야 음영이 어긋나지 않음
+    x, y, t, e = np.array([1.3, -7.2, 20.0]), np.array([0.4, 3.3, -11.0]), 2.1, 1e-5
+    sx, sy = water.wave_slope(x, y, t, WAVES)
+    assert np.allclose(sx, (water.wave_height(x + e, y, t, WAVES) - water.wave_height(x - e, y, t, WAVES)) / (2 * e))
+    assert np.allclose(sy, (water.wave_height(x, y + e, t, WAVES) - water.wave_height(x, y - e, t, WAVES)) / (2 * e))
+    # 메시 법선 전체 (줄임 띠 포함): 격자를 촘촘히 해서 높이 차분과 비교 (0.5 m 격자 차분은 짧은 물결을 못 따라감)
+    step = 0.02
+    monkeypatch.setattr(water, "WAVE_SURFACE_STEP", step)
+    verts, normals = water.wave_surface_mesh((0.0, 0.0), t, WAVES)
+    n = len(water.wave_surface_grid())
+    dz_dy, dz_dx = np.gradient(verts[:, 2].reshape(n, n), step)
+    nz = normals[:, 2].reshape(n, n)
+    slope_x, slope_y = -normals[:, 0].reshape(n, n) / nz, -normals[:, 1].reshape(n, n) / nz
+    # 줄임 띠 모서리(기울기가 꺾이는 곳)와 바깥 테두리 한 칸은 차분이 양쪽을 섞으므로 뺀다
+    axis = np.abs(water.wave_surface_grid())
+    edge = water.WAVE_SURFACE_HALF - np.maximum(axis[None, :], axis[:, None])
+    kink = (np.abs(edge - water.WAVE_SURFACE_FADE) < 2 * step) | (edge < 2 * step) | \
+           (np.abs(axis[None, :] - axis[:, None]) < 2 * step)
+    assert np.allclose(slope_x[~kink], dz_dx[~kink], atol=2e-3)
+    assert np.allclose(slope_y[~kink], dz_dy[~kink], atol=2e-3)
 
 
 def test_wave_surface_visual_follows_boat_on_grid():
@@ -989,11 +1018,12 @@ def test_wave_surface_visual_follows_boat_on_grid():
     water_part, robot = world.parts
     world.data.qpos[robot.qpos_adr:robot.qpos_adr + 2] = (12.34, -5.67)
     mujoco.mj_forward(world.model, world.data)
-    water_part.update_surface_visual(world.model, world.data)
-    center = world.model.geom(water.WAVE_SURFACE_GEOM).pos[:2]
+    mesh_id = water_part.update_surface_visual(world.model, world.data)
+    verts, _ = _surface_mesh_w(world.model, world.data, mesh_id)
+    center = verts[:, :2].mean(axis=0)
     step = water.WAVE_SURFACE_STEP
-    assert np.allclose(center / step, np.round(center / step))
-    assert np.all(np.abs(center - world.data.xpos[robot.body_id][:2]) <= step / 2 + 1e-9)
+    assert np.allclose(center / step, np.round(center / step), atol=1e-4)
+    assert np.all(np.abs(center - world.data.xpos[robot.body_id][:2]) <= step / 2 + 1e-4)
 
 
 def test_wave_surface_edge_fades_to_mean_level():
@@ -1020,17 +1050,65 @@ def test_wave_surface_visual_does_not_change_forces():
     assert np.allclose(forces(True), forces(False))
 
 
-def test_coast_map_lowers_flat_sea_below_wave_troughs():
-    # 해안 맵: 파도가 있으면 평평한 바다 판 윗면이 가장 낮은 골보다 아래 → 파도 수면을 가리지 않음
+def test_coast_map_draws_one_water_layer():
+    # 해안 맵: 잔잔하면 맵의 바다 판 하나. 파도가 있으면 맵 판은 없고 물이 메시 하나(패치 + 둘레 바다)를 그린다
+    # (두 겹이면 "물 위에 물"처럼 보였다). 갯벌은 가장 낮은 골보다 아래 → 수면을 뚫고 나오지 않음
     from sim.world.coast_map import build_hanagae_world
-    for waves, has_patch in ((CALM, False), (WAVES, True)):
-        world, *_ = build_hanagae_world(waves=waves)
-        model = world.model
-        sea = model.geom('hanagae_water_surface')
-        top = sea.pos[2] + sea.size[2]
-        assert (mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, water.WAVE_SURFACE_GEOM) >= 0) == has_patch
-        if has_patch:
-            assert top < WaterParams.SURFACE_Z - water.wave_amplitude(waves)
-        else:
-            assert top == pytest.approx(WaterParams.SURFACE_Z + .05)
+    def water_geoms(model):
+        names = (model.geom(i).name for i in range(model.ngeom))
+        return [name for name in names if name.startswith(water.WAVE_SURFACE_GEOM)]
+
+    calm, *_ = build_hanagae_world(waves=CALM)
+    sea = calm.model.geom('hanagae_water_surface')
+    assert sea.pos[2] + sea.size[2] == pytest.approx(WaterParams.SURFACE_Z + .05)
+    assert water_geoms(calm.model) == []
+
+    wavy, *_ = build_hanagae_world(waves=WAVES)
+    model = wavy.model
+    assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, 'hanagae_water_surface') == -1
+    # 패치와 둘레 바다가 한 메시 → 한 번의 업로드로 함께 바뀐다 (따로면 화면 반영 시점이 어긋나 테두리가 깜빡였다)
+    assert water_geoms(model) == [water.WAVE_SURFACE_GEOM]
+    flat = model.geom('hanagae_tidal_flat')
+    assert flat.pos[2] + flat.size[2] < WaterParams.SURFACE_Z - water.wave_amplitude(WAVES)
+
+
+def _triangle_areas(verts, faces):
+    """위에서 본 삼각형 넓이 (반시계면 +, 뒤집혔으면 −)."""
+    p = verts[faces][:, :, :2]
+    return 0.5 * np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0])
+
+
+@pytest.mark.parametrize("center", [(-80.0, 0.0), (-20.0, 10.0), (-250.0, -70.0), (500.0, 0.0)])
+def test_sea_ring_fills_sea_around_patch_without_overlap(center):
+    # 둘레 띠 + 패치 = 바깥 모서리 사각형 전체. 뒤집힌 삼각형 없음 → 겹치는 곳(두 겹으로 진해 보임)도 틈도 없다.
+    # 패치가 바다 밖으로 나가면 그쪽 모서리가 패치 테두리까지 넓어져 띠 폭이 0 이 된다
+    bounds = (-260.0, 0.0, -80.0, 80.0)
+    verts, _ = water.wave_surface_mesh(center, 0.0, (), bounds)
+    faces = water.wave_surface_faces(sea_ring=True)
+    areas = _triangle_areas(verts, faces)
+    assert np.all(areas > -1e-9)
+    corners = water.sea_ring_corners(bounds, center)
+    outer = (corners[1, 0] - corners[0, 0]) * (corners[2, 1] - corners[1, 1])
+    assert areas.sum() == pytest.approx(outer)
+    assert corners[0, 0] <= bounds[0] and corners[1, 0] >= bounds[1]           # 바다 범위를 모두 덮는다
+    assert corners[0, 1] <= bounds[2] and corners[2, 1] >= bounds[3]
+
+
+def test_sea_ring_follows_wave_patch():
+    # 배가 움직이면 패치와 바깥 모서리 꼭짓점이 같은 메시 안에서 함께 바뀐다
+    from sim.world.coast_map import SEA_BOUNDS, build_hanagae_world
+    world, robot, water_part, _ = build_hanagae_world(waves=WAVES)
+    model, data = world.model, world.data
+    n2 = len(water.wave_surface_grid()) ** 2
+    for boat_x in (-80.0, -20.0):
+        data.qpos[robot.qpos_adr] = boat_x
+        mujoco.mj_forward(model, data)
+        mesh_id = water_part.update_surface_visual(model, data)
+        verts, normals = _surface_mesh_w(model, data, mesh_id)
+        assert len(verts) == n2 + water.SEA_RING_CORNERS
+        center = verts[:n2, :2].mean(axis=0)
+        assert center[0] == pytest.approx(boat_x, abs=water.WAVE_SURFACE_STEP / 2 + 1e-4)
+        assert np.allclose(verts[n2:, :2], water.sea_ring_corners(SEA_BOUNDS, np.round(center / water.WAVE_SURFACE_STEP) * water.WAVE_SURFACE_STEP), atol=1e-3)
+        assert np.allclose(verts[n2:, 2], WaterParams.SURFACE_Z, atol=1e-5)
+        assert np.allclose(normals[n2:], [0.0, 0.0, 1.0], atol=1e-5)
 

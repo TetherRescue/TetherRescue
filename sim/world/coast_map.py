@@ -23,6 +23,8 @@ FLAT_WIDTH = 25.0             # 해안 앞 갯벌
 SEA_WEST = -260.0             # 바다 서쪽 끝 (익수자 200m + 여유)
 SEA_HALF_Y = 80.0
 VICTIM_RANGE = 200.0          # 해안선에서 익수자까지 거리
+SEA_BOUNDS = (SEA_WEST, SHORE_X, -SEA_HALF_Y, SEA_HALF_Y)   # 수면을 그리는 범위 (x0, x1, y0, y1)
+SEA_RGBA = (.06, .32, .45, .45)
 
 
 def _visual_box(spec, *, name, pos, size, rgba):
@@ -51,8 +53,9 @@ class CoastalMap:
     REQUIRES = {}
 
     def __init__(self, *, scene='hanagae', wave_amplitude=0.0):
-        """wave_amplitude: 파도 진폭 합 [m]. 0 보다 크면 평평한 바다 판을 파도 골 아래로 내린다.
-        파도 수면은 Water(wave_visual=True) 가 배 주변에 따로 그린다 → 평평한 판이 골을 가리지 않게.
+        """wave_amplitude: 파도 진폭 합 [m]. 0 보다 크면 맵은 바다 판을 그리지 않고 갯벌을 파도 골 아래로 내린다.
+        파도가 있을 때 수면은 Water(wave_visual=True, sea_bounds=SEA_BOUNDS) 가 한 겹으로 그린다
+        (배 주변 파도 패치 + 둘레 평평한 바다를 메시 하나로). 맵 판까지 겹치면 "물 위에 물"처럼 보였다.
         """
         if scene != 'hanagae':
             raise ValueError('지원하는 장면은 hanagae뿐입니다.')
@@ -63,16 +66,21 @@ class CoastalMap:
         surface = config.WaterParams.SURFACE_Z
         y0, y1 = -SEA_HALF_Y, SEA_HALF_Y
 
-        # 파도가 있으면 수면 판·갯벌 윗면을 가장 낮은 파도 골보다 1 cm 아래로 내린다 (파도 수면을 가리지 않게)
+        # 파도가 있으면 갯벌 윗면을 가장 낮은 파도 골보다 1 cm 아래로 내린다 (파도 수면을 뚫고 나오지 않게)
         drop = self.wave_amplitude + .06 if self.wave_amplitude > 0 else 0.0
 
-        # 넓은 수면 (Water 기본 50m 평면 대신 맵이 표시)
-        sea_z = surface - drop
-        _visual_box(spec, name='hanagae_water_surface',
-                    pos=((SEA_WEST + SHORE_X) / 2, 0, sea_z),
-                    size=((SHORE_X - SEA_WEST) / 2, SEA_HALF_Y, .05),
-                    rgba=(.06, .32, .45, .45))
-        spec.worldbody.add_light(pos=(SHORE_X - 40, 0, 40), dir=(0, 0, -1), diffuse=(.75, .75, .75))
+        # 넓은 수면 (Water 기본 50m 평면 대신 맵이 표시). 파도가 있으면 Water 가 그린다
+        if self.wave_amplitude <= 0:
+            _visual_box(spec, name='hanagae_water_surface',
+                        pos=((SEA_WEST + SHORE_X) / 2, 0, surface),
+                        size=((SHORE_X - SEA_WEST) / 2, SEA_HALF_Y, .05),
+                        rgba=SEA_RGBA)
+        # 햇빛처럼 평행광, 그림자 끔 (2026-11-23 렌더 확인):
+        #   - 스포트라이트는 꼭짓점마다 밝기를 계산해서, 꼭짓점이 멀리 있는 큰 상자(바다 판)는 거의 안 비추고
+        #     꼭짓점이 촘촘한 파도 높이맵만 밝게 비춰 → 배 주변 50 m 네모가 밝게 튀어 보였다.
+        #   - 그림자를 켜면 파도 높이맵에 자잘한 줄무늬(shadow acne)가 생긴다.
+        spec.worldbody.add_light(pos=(SHORE_X - 40, 0, 40), dir=(0, 0, -1), diffuse=(.75, .75, .75),
+                                 type=mujoco.mjtLightType.mjLIGHT_DIRECTIONAL, castshadow=False)
 
         # 해저: 수면에서 아래로 이어지게
         _box_from_bounds(spec, name='hanagae_seabed',
@@ -174,19 +182,18 @@ def _set_boat_pose(world, robot, position, yaw):
 def build_hanagae_world(*, waves=None, boat_on_land=False, victim_range=VICTIM_RANGE):
     """동쪽 육지 + 서쪽 바다에 배·익수자를 조립한다."""
     from sim.robot.robot import Robot
-    from sim.water.water import Water
+    from sim.water.water import Water, wave_amplitude
     from sim.world.human import Human
     from sim.world.world import build_world
 
     if waves is None:
         waves = config.WaterParams.WAVES_CALM
     position, yaw = land_boat_pose() if boat_on_land else water_launch_pose()
-    # 맵이 넓은 수면을 그리므로 Water의 50m 기본 평면은 끈다. 파도가 있으면 배 주변 파도 수면만 Water가 그린다.
-    water = Water(waves=waves, surface_visual=False, wave_visual=True,
+    # Water의 50m 기본 평면은 끈다. 잔잔하면 맵이 넓은 수면 판을, 파도가 있으면 Water가 수면 전체를 한 겹으로 그린다.
+    water = Water(waves=waves, surface_visual=False, wave_visual=True, sea_bounds=SEA_BOUNDS, sea_rgba=SEA_RGBA,
                   floating_bodies=[config.Names.HUMAN_BODY])
     robot = Robot(surface_height=water.wave_height, position=position)
     human = Human(position=victim_spawn_position(range_m=victim_range))
-    from sim.water.water import wave_amplitude
     world = build_world(parts=[water, CoastalMap(wave_amplitude=wave_amplitude(waves)), robot, human])
     _set_boat_pose(world, robot, position, yaw)
     return world, robot, water, human
