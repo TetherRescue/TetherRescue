@@ -26,8 +26,8 @@ class Robot:
     def __init__(self, surface_height=None, *, position=None, yaw=0.0, tow_point_b=None, winch=False):
         """surface_height: 수면 높이 함수 (x, y, t) -> z, 예: Water().wave_height. x, y 는 배열로 받음.
 
-        None 이면 1주차 가정 "노즐은 항상 물속" (WaterAPI.USE_IN_WEEK1 = False).
-        주면 노즐이 수면 위로 나온 스텝에는 그 노즐 추력을 0 으로 한다 (Thruster.FULL_THRUST_DEPTH 주석).
+        None 이면 build_world 가 세계의 Water 와 자동 연결한다 (Water 가 없거나 둘 이상이면 None 그대로 = 항상 물속).
+        연결되면 흡입구가 수면 위로 나온 스텝에는 그쪽 추력을 0 으로 한다 (Thruster.INTAKE_*_B, FULL_THRUST_DEPTH 주석).
         winch: True 면 선미 로프(Names.TETHER_TENDON)의 길이를 배가 조절한다.
           처음엔 Winch.STOW_LENGTH 로 짧게 감아 구명환을 끌고 가고, pay_out() 으로 PAYOUT_LENGTH 까지 풀어 건네준다.
           세계에 Tether(enabled=True, attached=True) 가 있어야 한다 (로프 자체·장력 계산은 가영 tether.py).
@@ -317,11 +317,21 @@ class Robot:
         points_b = self._model.site_pos[[self.thr_l_site_id, self.thr_r_site_id]] * (1.0, 1.0, -1.0)
         return data.xpos[self.body_id] + points_b @ rotation.T
 
-    def nozzles_submerged(self, data):
-        """(왼쪽, 오른쪽) 노즐이 수면 아래인지. surface_height 가 없으면 항상 (True, True)."""
+    def intake_points_w(self, data):
+        """(왼쪽, 오른쪽) 흡입구 점 [월드]. 추력 차단 판정용 (힘을 거는 점은 nozzle_points_w).
+
+        뒤집히면 몸체 z 를 뒤집은 자리 (양면 워터젯, 물속 쪽).
+        """
+        points_b = np.array([Thruster.INTAKE_L_B, Thruster.INTAKE_R_B])
+        if self.inverted:
+            points_b *= (1.0, 1.0, -1.0)
+        return frames.point_body_to_world(data, self.body_id, points_b)
+
+    def intakes_submerged(self, data):
+        """(왼쪽, 오른쪽) 흡입구가 수면 아래인지. surface_height 가 없으면 항상 (True, True)."""
         if self.surface_height is None:
             return (True, True)
-        pos = self.nozzle_points_w(data)
+        pos = self.intake_points_w(data)
         surface = self.surface_height(pos[:, 0], pos[:, 1], data.time)   # 두 점을 한 번에 (WAVE_HEIGHT_VECTORIZED)
         return tuple(bool(z < s) for z, s in zip(pos[:, 2], surface))
 
@@ -337,9 +347,9 @@ class Robot:
         thrusts = self.thrusts()
         if self.inverted:
             thrusts = thrusts[::-1]   # 몸체 왼쪽 노즐이 세상 오른쪽에 있음
-        for point, thrust, wet in zip(self.nozzle_points_w(data), thrusts, self.nozzles_submerged(data)):
+        for point, thrust, wet in zip(self.nozzle_points_w(data), thrusts, self.intakes_submerged(data)):
             if not wet:
-                continue   # 노즐이 공기 중이면 물을 못 밀어 추력 없음
+                continue   # 흡입구가 공기 중이면 물을 못 빨아들여 추력 없음
             force_w = frames.body_to_world(data, self.body_id, (thrust, 0.0, 0.0))
             acc.add(self.body_id, force_w, point_w=point)
         if self.winch:
