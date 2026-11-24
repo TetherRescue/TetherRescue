@@ -1,4 +1,5 @@
-"""월미도 해안 구조 시나리오: python -m sim.world.view_wolmido [--env calm|waves|low_tide] [--speed 2] [--headless].
+"""월미도 해안 구조 시나리오: python -m sim.world.view_wolmido [--env calm|waves|low_tide] [--weather clear|rain|fog]
+[--calm-person] [--speed 2] [--headless].
 
 사람은 바다 한가운데에 구명환 없이 떠 있다. 구조 로봇(동경 A형 선체)은 구명환을 발사대에 싣고 해변 물가에서 출발해
 사람 둘레를 돌아 선미를 사람 쪽으로 두고 멈춘 뒤 구명환을 쏜다(동경 Launcher·LaunchMission). 사람이 잡으면
@@ -7,6 +8,12 @@
   calm      만조·잔잔한 물
   waves     만조·파도(물 담당 기본 파도)
   low_tide  간조·잔잔한 물. 해변이 넓게 드러나 물가가 사람 쪽으로 다가오고, 방파제 앞 바위가 수면 위로 나온다
+[시험, 브랜치 try/weather, 가영 2026-11-24] 날씨와 사람 발버둥을 이 장면에 함께 넣었다.
+  날씨(sim.world.weather_wolmido): clear 맑음 · rain 비 · fog 안개. 화면(하늘·조명·안개·빗줄기·수면 색)만 바꾸고
+    파도·물때는 위 환경이 정한다. 화면을 보는 중에 F6 맑음 · F7 비 · F8 안개로 바로 바꿀 수 있다
+    (F1~F5·글자 키는 MuJoCo 뷰어가 이미 쓴다).
+  사람(sim.world.struggle): 구명환을 잡기 전까지 물속에 선 자세로 허우적대고, 주기마다 손을 흔들며 HELP!를 띄운다.
+    화면 실행은 기본으로 켜고, --calm-person 으로 끈다. build_wolmido는 기본으로 끈다 (기존 시험과 같은 물리).
 """
 
 import argparse
@@ -32,11 +39,16 @@ def beach_start(world_map, victim):
     return start, yaw, yaw + math.pi, min(distance - cfg.BEACH_TOW_STOP, cfg.BEACH_TOW_MAX)
 
 
-def build_wolmido(env='calm', *, launch=None, watchdog_settings=None):
+WEATHER_KEYS = {295: 'clear', 296: 'rain', 297: 'fog'}   # GLFW 키 코드: F6, F7, F8
+
+
+def build_wolmido(env='calm', *, weather=None, struggle=False, launch=None, watchdog_settings=None):
     """월미도 맵·환경에 동경 구명환 발사 시나리오(LaunchMission)를 조립한다. (LaunchMission, WolmidoMap)을 돌려준다.
 
     배는 해변 물가에서 사람 쪽을 보고 출발하고, 구명환은 배 발사대에 실려 있다. 사람은 바다 한가운데에 구명환 없이 떠 있다.
     조립 순서·부품은 동경 build_launch_mission과 같고, 맵(WolmidoMap)과 환경의 파도만 더한다 (그 파일은 바꾸지 않음).
+    weather: 날씨 이름(None이면 날씨 부품 없음). 표시만 바꾼다. struggle=True면 사람이 허우적대고 손을 흔든다(힘이 더해짐).
+    환경에 파도가 있으면 평평한 수면 판 대신 파도 모양 수면(WaveSurface)을 그린다 (표시만).
     """
     from sim.robot.launcher import Launcher
     from sim.robot.robot import Robot
@@ -46,7 +58,10 @@ def build_wolmido(env='calm', *, launch=None, watchdog_settings=None):
     from sim.world.launch_mission import LaunchMission, LaunchSettings
     from sim.world.lifebuoy import Lifebuoy
     from sim.world.rescue_mission import RescueMissionSettings
+    from sim.world.struggle import Struggle
     from sim.world.tether import Tether
+    from sim.world.wave_visual import WaveSurface
+    from sim.world.weather_wolmido import WolmidoWeather
     from sim.world.world import build_world
 
     setting = WolmidoMap.environment(env)
@@ -56,13 +71,21 @@ def build_wolmido(env='calm', *, launch=None, watchdog_settings=None):
     surface = config.WaterParams.SURFACE_Z
     robot = Robot(position=(*start, surface + config.Hull.HEIGHT / 2 - config.Expect.DRAFT), yaw=yaw, winch=True)
     human = Human(position=(*setting['victim'], surface - .03), grip_sites=True)
-    water = Water(waves=getattr(config.WaterParams, setting['waves']),
-                  floating_bodies=[config.Names.HUMAN_BODY, config.Names.LIFEBUOY_BODY], surface_visual=True)
+    waves = getattr(config.WaterParams, setting['waves'])
+    water = Water(waves=waves, floating_bodies=[config.Names.HUMAN_BODY, config.Names.LIFEBUOY_BODY],
+                  surface_visual=not waves)
     ring = Lifebuoy(grip_sites=True)
     rope = Tether(enabled=True, attached=True)
     grasp = HumanGrasp(settings=GraspSettings(max_distance=launch.reach, max_relative_speed=launch.grab_relative_speed))
     launcher = Launcher(ring_site=grasp.ring_name)
-    world = build_world(parts=[water, robot, human, ring, rope, grasp, launcher, world_map])
+    parts = [water, robot, human, ring, rope, grasp, launcher, world_map]
+    if waves:
+        parts.append(WaveSurface(waves))
+    if struggle:
+        parts.append(Struggle(human, grasp, facing=tow_heading))   # 선 자세, 얼굴은 배가 오는 해변 쪽
+    if weather is not None:
+        parts.append(WolmidoWeather(weather))
+    world = build_world(parts=parts)
     mujoco.mj_forward(world.model, world.data)
     mission = LaunchMission(world, robot, launcher, grasp, rope, tow_heading=tow_heading,
                             settings=RescueMissionSettings(tow_distance=tow_distance, tow_speed=.7),
@@ -94,19 +117,40 @@ def run_headless(mission, timeout):
             f"잡음 {mission.grab_time:.1f}초 → 견인 완료 {data.time:.1f}초, 사람 진행 {state['tow_progress']:.2f} m")
 
 
+def _part(world, kind):
+    return next((part for part in world.parts if isinstance(part, kind)), None)
+
+
 def run_viewer(mission, title, speed=1.):
     import time
     import mujoco.viewer
     from sim.world.rope_visual import draw_rope
+    from sim.world.struggle import Struggle
+    from sim.world.wave_visual import WaveSurface
+    from sim.world.weather_wolmido import WolmidoWeather
 
     world = mission.world
-    with mujoco.viewer.launch_passive(world.model, world.data) as viewer:
+    wave, struggle, sky = _part(world, WaveSurface), _part(world, Struggle), _part(world, WolmidoWeather)
+    asked = []   # 키 콜백(뷰어 스레드)이 넣은 날씨 이름. 화면 루프가 lock 안에서 꺼내 적용한다
+
+    def on_key(key):
+        if sky is not None and key in WEATHER_KEYS:
+            asked.append(WEATHER_KEYS[key])
+
+    with mujoco.viewer.launch_passive(world.model, world.data, key_callback=on_key) as viewer:
         viewer.opt.geomgroup[config.Groups.PHYSICS] = 1
         viewer.cam.distance, viewer.cam.azimuth, viewer.cam.elevation = 16., 150., -32.
+        if sky is not None:
+            viewer.user_scn.flags[mujoco.mjtRndFlag.mjRND_FOG] = sky.foggy
         frame, budget = 1 / 60, 0.
         while viewer.is_running():
             started = time.monotonic()
+            texture = None
             with viewer.lock():
+                if asked:
+                    texture = sky.apply(world.model, asked.pop())
+                    asked.clear()
+                    viewer.user_scn.flags[mujoco.mjtRndFlag.mjRND_FOG] = sky.foggy
                 if not mission.failed and not mission.arrived:
                     # 계산이 배속을 못 따라가면 밀린 시간은 버린다 (동경 view_launch와 같은 방식)
                     budget = min(budget + frame * speed, 2 * frame * speed)
@@ -114,15 +158,29 @@ def run_viewer(mission, title, speed=1.):
                         if mission.step() is False:
                             break
                         budget -= world.model.opt.timestep
-                draw_rope(viewer.user_scn, world.model, world.data, mission.rope)
                 viewer.cam.lookat[:] = (world.data.xpos[mission.robot.body_id] + world.data.xpos[mission.human_body]) / 2
+                viewer.user_scn.ngeom = 0   # 매 화면 줄·팔다리·빗줄기를 새로 그린다
+                draw_rope(viewer.user_scn, world.model, world.data, mission.rope)
+                if struggle is not None:
+                    struggle.draw(viewer.user_scn, world.model, world.data)
+                if sky is not None:
+                    sky.draw_fog(viewer.user_scn, viewer.cam, world.data.time)
+                    sky.draw_rain(viewer.user_scn, viewer.cam.lookat, world.data.time)
+                if wave is not None:
+                    wave.update(world.model, world.data.time)
+            if texture is not None:
+                viewer.update_texture(texture)   # 바뀐 하늘색을 화면에 올린다
+            if wave is not None:
+                viewer.update_hfield(wave.hfield_id)   # 바뀐 수면 높이를 화면에 올린다
             state = mission.readings()
             landing = state['landing']
             status = (mission.failure.code.value if mission.failed else 'COMPLETE' if mission.arrived else state['phase'])
+            weather = '' if sky is None else 'Weather\n'
+            weather_value = '' if sky is None else f'{sky.name}  (F6 clear / F7 rain / F8 fog)\n'
             viewer.set_texts([(mujoco.mjtFontScale.mjFONTSCALE_150, mujoco.mjtGridPos.mjGRID_TOPLEFT,
-                               f'{title} (x{speed:g})\nPhase\nTime\nLauncher\nGrip-hand gap\nLanding miss\nHeld\n'
+                               f'{title} (x{speed:g})\n{weather}Phase\nTime\nLauncher\nGrip-hand gap\nLanding miss\nHeld\n'
                                'Tension\nPerson towed',
-                               f"\n{status}\n{world.data.time:.1f} s\n{state['launcher']}\n{state['hand_gap']:.2f} m\n"
+                               f"\n{weather_value}{status}\n{world.data.time:.1f} s\n{state['launcher']}\n{state['hand_gap']:.2f} m\n"
                                + (f"{landing['grip_to_hand']:.2f} m" if landing else '-')
                                + f"\n{state['held']}\n{state['tension']:.1f} N\n{state['tow_progress']:.2f} m")])
             viewer.sync()
@@ -132,13 +190,16 @@ def run_viewer(mission, title, speed=1.):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--env', choices=tuple(config.Wolmido.ENVIRONMENTS), default='calm')
+    parser.add_argument('--weather', choices=tuple(WEATHER_KEYS.values()), default='clear',
+                        help='시작 날씨 (화면에서 F6·F7·F8로 바꿀 수 있음)')
+    parser.add_argument('--calm-person', action='store_true', help='사람 허우적대기·손 흔들기 끄기')
     parser.add_argument('--speed', type=float, default=2., help='화면 재생 배속 (기본 2배, headless 에는 영향 없음)')
     parser.add_argument('--headless', action='store_true')
     parser.add_argument('--timeout', type=float, default=240, help='headless 제한 시뮬레이션 시간 [초]')
     args = parser.parse_args()
     if not math.isfinite(args.speed) or args.speed <= 0:
         parser.error('--speed 는 양수여야 합니다.')
-    mission, world_map = build_wolmido(args.env)
+    mission, world_map = build_wolmido(args.env, weather=args.weather, struggle=not args.calm_person)
     if args.headless:
         try:
             print(f'[{args.env}] ' + run_headless(mission, args.timeout))
