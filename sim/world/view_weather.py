@@ -1,7 +1,7 @@
 """[시험용] 월미도 날씨 구조 시나리오: python -m sim.world.view_weather [--weather clear|rain|fog] [--tide high|low]
 [--speed 2] [--headless]
 
-view_wolmido와 같은 구조 흐름(동경 Launcher·LaunchMission)에 날씨만 더한다 (브랜치 try/weather, 가영 2026-11-20).
+view_wolmido와 같은 구조 흐름(동경 Launcher·LaunchMission)에 날씨만 더한다 (브랜치 dev/kayoung-weather, 가영 2026-11-20).
   clear  맑음: 밝은 하늘
   rain   비: 굵은 비, 어두운 하늘, 가시거리 70 m (세 날씨 모두 기본 파도의 절반 높이)
   fog    안개: 가시거리 25 m
