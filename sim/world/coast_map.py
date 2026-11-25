@@ -61,6 +61,7 @@ class CoastalMap:
             raise ValueError('지원하는 장면은 hanagae뿐입니다.')
         self.scene = scene
         self.wave_amplitude = float(wave_amplitude)
+        self._bathers = []
 
     def build(self, spec):
         surface = config.WaterParams.SURFACE_Z
@@ -134,12 +135,210 @@ class CoastalMap:
                                 pos=(SHORE_X - 8.0, 5.0, surface + .5),
                                 size=(.5, .5, .5), rgba=(.95, .75, .1, 1),
                                 type=mujoco.mjtGeom.mjGEOM_SPHERE)
+        _add_beachgoers(spec, surface)
+        _add_reef(spec, surface)
 
     def bind(self, model):
-        return None
+        """물놀이 몸체의 처음 자세를 기억한다. 화면마다 이 자세에서 팔·몸을 움직인다."""
+        self._bathers = []
+        for index, (*_place, pose, _scale) in enumerate(_BEACHGOERS):
+            body = model.body(f'hanagae_bather_{index}')
+            joints = []
+            for part in ('arm_l', 'arm_r'):
+                jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f'hanagae_bather_{index}_{part}')
+                if jid >= 0:
+                    joints.append((int(model.jnt_qposadr[jid]), int(model.jnt_dofadr[jid])))
+            self._bathers.append(dict(mocap=int(body.mocapid[0]), pose=pose,
+                                      pos=model.body(body.id).pos.copy(), quat=model.body(body.id).quat.copy(),
+                                      joints=joints))
 
     def add_forces(self, model, data, acc):
-        return None
+        self.animate(model, data)
+
+    def animate(self, model, data):
+        """data.time 기준으로 물장구·헤엄 자세를 갱신한다. 힘과 익수자 물리는 바꾸지 않는다."""
+        if not self._bathers:
+            return
+        t = float(data.time)
+        for index, bather in enumerate(self._bathers):
+            cycle = t * 2.2 + index * 0.6
+            pose = bather['pose']
+            pos = np.array(bather['pos'], dtype=float)
+            pos[2] += .28 * math.sin(cycle * 2)
+            if pose in ('paddle', 'breast'):
+                pos[0] += 1.4 * math.sin(cycle)
+            data.mocap_pos[bather['mocap']] = pos
+            quat = np.array(bather['quat'], dtype=float)
+            if pose == 'float':
+                quat = _quat_mul(_axis_quat((1, 0, 0), .5 * math.sin(cycle)), quat)
+            elif pose == 'dive':
+                quat = _quat_mul(_axis_quat((0, 1, 0), 1.1 * math.sin(cycle * .8)), quat)
+            elif pose == 'splash':
+                quat = _quat_mul(_axis_quat((0, 1, 0), .45 * math.sin(cycle * 2)), quat)
+            data.mocap_quat[bather['mocap']] = quat
+            for side, (qadr, dadr) in enumerate(bather['joints']):
+                if pose == 'splash':
+                    angle = 1.4 * math.sin(cycle * 3 + side * 1.5)
+                elif pose == 'breast':
+                    angle = 1.2 * math.sin(cycle * 2)
+                elif pose == 'wave' and side == 1:
+                    angle = 1.3 * math.sin(cycle * 2)
+                elif pose == 'paddle':
+                    angle = 1.1 * math.sin(cycle * 2 + side * math.pi)
+                else:
+                    angle = .9 * math.sin(cycle * 2 + side * math.pi)
+                data.qpos[qadr] = angle
+                data.qvel[dadr] = 0.0
+
+
+# 얕은 바다에서 물놀이. (x, y, yaw, pose, scale). 가슴~목까지 잠기게 발을 수면 아래에 둔다.
+# 출항 직선(y=0)과 암초 자리는 비워 둔다.
+_BEACHGOERS = (
+    (-8, -16, math.pi, 'splash', 1.0),
+    (-14, -8, math.pi * .9, 'paddle', 1.0),
+    (-6, 8, math.pi, 'tread', 1.0),
+    (-18, 14, math.pi * 1.1, 'float', 1.0),
+    (-11, 22, math.pi, 'dive', 1.0),
+    (-22, -22, math.pi * .8, 'breast', 1.0),
+    (-9, -28, math.pi, 'splash', .9),
+    (-16, 28, math.pi, 'ball', 1.0),
+    (-7, 34, math.pi * 1.2, 'wave', .7),
+    (-24, 6, math.pi, 'paddle', 1.0),
+)
+# 암초: 수평 길이는 선체 길이의 약 5배. 바닥은 수면 아래, 꼭대기는 수면 위라 배가 타고 넘지 못한다.
+REEF_CENTER = (-110.0, 0.0)
+REEF_LENGTH = 5 * config.Hull.LENGTH
+REEF_WIDTH = 4.0
+REEF_BOTTOM = -2.2
+REEF_TOP = 1.3
+_SHIRTS = (
+    (.75, .22, .18, 1), (.2, .45, .75, 1), (.95, .8, .2, 1), (.15, .55, .35, 1), (.55, .25, .7, 1),
+    (.9, .45, .2, 1), (.25, .7, .75, 1), (.85, .15, .4, 1), (.35, .35, .85, 1), (.7, .55, .3, 1),
+)
+_SKIN = (.86, .67, .48, 1)
+
+
+def _visual_capsule(body, name, start, end, radius, rgba, mass=0.0):
+    body.add_geom(
+        name=name, type=mujoco.mjtGeom.mjGEOM_CAPSULE, fromto=(*start, *end),
+        size=(radius, 0, 0), rgba=rgba, contype=0, conaffinity=0,
+        group=config.Groups.VISUAL, mass=mass,
+    )
+
+
+def _visual_sphere(body, name, pos, radius, rgba):
+    body.add_geom(
+        name=name, type=mujoco.mjtGeom.mjGEOM_SPHERE, pos=pos, size=(radius, 0, 0),
+        rgba=rgba, contype=0, conaffinity=0, group=config.Groups.VISUAL, mass=0,
+    )
+
+
+def _beach_pose(body, prefix, pose, scale, shirt):
+    """수면 근처 물놀이 자세. 발은 몸체 원점이고 몸통은 물 위로 조금 나온다."""
+    s = scale
+    skin = _SKIN
+
+    def cap(part, a, b, radius, color=skin):
+        _visual_capsule(body, f'{prefix}_{part}', tuple(v * s for v in a), tuple(v * s for v in b), radius * s, color)
+
+    def ball(part, pos, radius, color=skin):
+        _visual_sphere(body, f'{prefix}_{part}', tuple(v * s for v in pos), radius * s, color)
+
+    def arm(part, shoulder, tip, radius=.035, color=skin):
+        """어깨 힌지. qpos를 돌리면 헤엄·물장구가 화면에 그대로 보인다."""
+        shoulder = np.asarray(shoulder, dtype=float) * s
+        tip = np.asarray(tip, dtype=float) * s
+        limb = body.add_body(name=f'{prefix}_{part}', pos=shoulder)
+        limb.add_joint(name=f'{prefix}_{part}', type=mujoco.mjtJoint.mjJNT_HINGE, axis=(0, 1, 0))
+        _visual_capsule(limb, f'{prefix}_{part}_seg', (0, 0, 0), tip - shoulder, radius * s, color, mass=.05)
+
+    if pose == 'paddle':
+        cap('torso', (.15, 0, .15), (.7, 0, .12), .1, shirt)
+        ball('head', (0, 0, .22), .1)
+        arm('arm_l', (.2, -.12, .16), (.55, -.22, .02))
+        arm('arm_r', (.25, .12, .18), (.15, .28, .28))
+        cap('leg_l', (.6, -.08, .1), (1.05, -.12, -.05), .045)
+        cap('leg_r', (.6, .08, .1), (1.0, .16, .02), .045)
+        return
+    if pose == 'float':
+        cap('torso', (.1, 0, .12), (.65, 0, .16), .1, shirt)
+        ball('head', (-.05, 0, .24), .1)
+        arm('arm_l', (.2, -.12, .2), (.15, -.45, .18))
+        arm('arm_r', (.2, .12, .2), (.15, .45, .18))
+        cap('leg_l', (.55, -.06, .12), (.95, -.08, .08), .045)
+        cap('leg_r', (.55, .06, .12), (.95, .1, .08), .045)
+        return
+    if pose == 'dive':
+        cap('torso', (0, 0, .55), (.35, 0, .15), .1, shirt)
+        ball('head', (.5, 0, -.02), .1)
+        arm('arm_l', (.2, -.1, .35), (.45, -.08, .05))
+        arm('arm_r', (.2, .1, .35), (.45, .08, .05))
+        cap('leg_l', (-.05, -.08, .7), (-.15, -.1, 1.15), .045)
+        cap('leg_r', (-.05, .08, .7), (-.1, .12, 1.15), .045)
+        return
+    if pose == 'breast':
+        cap('torso', (.1, 0, .16), (.65, 0, .14), .1, shirt)
+        ball('head', (-.02, 0, .26), .1)
+        arm('arm_l', (.15, -.1, .2), (.4, -.28, .16))
+        arm('arm_r', (.15, .1, .2), (.4, .28, .16))
+        cap('leg_l', (.6, -.08, .12), (.85, -.2, .05), .045)
+        cap('leg_r', (.6, .08, .12), (.85, .2, .05), .045)
+        return
+    # 가슴까지 잠긴 채 물장구·발 젓기·공놀이
+    cap('leg_l', (0, -.08, .15), (.05, -.1, .75), .05)
+    cap('leg_r', (0, .08, .1), (-.08, .12, .7), .05)
+    cap('torso', (0, 0, .8), (0, 0, 1.3), .11, shirt)
+    ball('head', (0, 0, 1.48), .1)
+    if pose == 'splash':
+        arm('arm_l', (0, -.16, 1.15), (.15, -.32, .72))
+        arm('arm_r', (0, .16, 1.2), (-.05, .28, 1.45))
+    elif pose == 'ball':
+        arm('arm_l', (.05, -.14, 1.15), (.28, -.1, .95))
+        arm('arm_r', (.05, .14, 1.15), (.28, .1, .95))
+        ball('ball', (.42, 0, .9), .11, (.9, .2, .15, 1))
+    elif pose == 'wave':
+        arm('arm_l', (0, -.16, 1.15), (.1, -.3, .85))
+        arm('arm_r', (0, .14, 1.25), (.08, .18, 1.7))
+    else:  # tread
+        arm('arm_l', (0, -.16, 1.15), (-.05, -.4, 1.05))
+        arm('arm_r', (0, .16, 1.15), (.05, .4, 1.0))
+
+
+def _add_beachgoers(spec, surface):
+    """얕은 바다의 물놀이 10명. 익수자 Human과 이름·관절을 공유하지 않는다."""
+    for index, (x, y, yaw, pose, scale) in enumerate(_BEACHGOERS):
+        # 수평 자세는 수면에 붙이고, 선 자세는 발을 물속에 둔다.
+        z = surface - .05 if pose in ('paddle', 'float', 'breast', 'dive') else surface - 1.05
+        quat = (math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2))
+        body = spec.worldbody.add_body(name=f'hanagae_bather_{index}', pos=(x, y, z), quat=quat, mocap=True)
+        _beach_pose(body, f'hanagae_bather_{index}', pose, scale, _SHIRTS[index])
+
+
+def _add_reef(spec, surface):
+    """항로 한가운데 암초. 월미도와 같은 지형 충돌 비트라 배·사람이 통과하지 못한다."""
+    contacts = config.Contacts
+    cx, cy = REEF_CENTER
+    half_z = (REEF_TOP - REEF_BOTTOM) / 2
+    spec.worldbody.add_geom(
+        name='hanagae_reef', type=mujoco.mjtGeom.mjGEOM_BOX,
+        pos=(cx, cy, surface + (REEF_BOTTOM + REEF_TOP) / 2),
+        size=(REEF_LENGTH / 2, REEF_WIDTH / 2, half_z),
+        rgba=(.42, .4, .36, 1),
+        group=config.Groups.PHYSICS, contype=contacts.ENV, conaffinity=contacts.ENV_AFFINITY,
+        solref=[.006, 1], solimp=[.95, .99, .001, .5, 2], priority=1,
+    )
+
+
+def _axis_quat(axis, angle):
+    quat = np.zeros(4)
+    mujoco.mju_axisAngle2Quat(quat, np.asarray(axis, dtype=float), float(angle))
+    return quat
+
+
+def _quat_mul(left, right):
+    out = np.zeros(4)
+    mujoco.mju_mulQuat(out, np.asarray(left, dtype=float), np.asarray(right, dtype=float))
+    return out
 
 
 def victim_spawn_position(*, range_m=VICTIM_RANGE):

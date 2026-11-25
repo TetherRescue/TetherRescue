@@ -42,7 +42,8 @@ def beach_start(world_map, victim):
 WEATHER_KEYS = {295: 'clear', 296: 'rain', 297: 'fog'}   # GLFW 키 코드: F6, F7, F8
 
 
-def build_wolmido(env='calm', *, weather=None, struggle=False, launch=None, watchdog_settings=None):
+def build_wolmido(env='calm', *, weather=None, struggle=False, launch=None, watchdog_settings=None,
+                  wave_set=None, tide_drop=None):
     """월미도 맵·환경에 동경 구명환 발사 시나리오(LaunchMission)를 조립한다. (LaunchMission, WolmidoMap)을 돌려준다.
 
     배는 해변 물가에서 사람 쪽을 보고 출발하고, 구명환은 배 발사대에 실려 있다. 사람은 바다 한가운데에 구명환 없이 떠 있다.
@@ -66,12 +67,16 @@ def build_wolmido(env='calm', *, weather=None, struggle=False, launch=None, watc
 
     setting = WolmidoMap.environment(env)
     launch = LaunchSettings() if launch is None else launch
-    world_map = WolmidoMap(tide_drop=setting['tide_drop'])
+    if tide_drop is None:
+        tide_drop = setting['tide_drop']
+    if not math.isfinite(tide_drop) or tide_drop < 0:
+        raise ValueError('tide_drop은 0 이상이어야 합니다.')
+    world_map = WolmidoMap(tide_drop=tide_drop)
     start, yaw, tow_heading, tow_distance = beach_start(world_map, setting['victim'])
     surface = config.WaterParams.SURFACE_Z
     robot = Robot(position=(*start, surface + config.Hull.HEIGHT / 2 - config.Expect.DRAFT), yaw=yaw, winch=True)
     human = Human(position=(*setting['victim'], surface - .03), grip_sites=True)
-    waves = getattr(config.WaterParams, setting['waves'])
+    waves = getattr(config.WaterParams, setting['waves']) if wave_set is None else tuple(wave_set)
     water = Water(waves=waves, floating_bodies=[config.Names.HUMAN_BODY, config.Names.LIFEBUOY_BODY],
                   surface_visual=not waves)
     ring = Lifebuoy(grip_sites=True)
