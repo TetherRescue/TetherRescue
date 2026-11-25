@@ -14,12 +14,13 @@ GPS 수동 입력은 아직 없고, 발견자가 배를 띄우는 연출은 수�
 
 ```bash
 conda activate rescue
-python -m sim.run_sim                 # MuJoCo 창으로 시뮬레이션 표시 (기본)
-python -m sim.run_sim --victim-range 200 --launch-delay 3
+python -m sim.run_sim                 # 시뮬레이션 창 + 설정 창
+python -m sim.run_sim --map wolmido --waves --tide low --weather rain
 # 창 없이 로그만: python -m sim.run_sim --headless
 ```
 
-`--headless`를 붙이면 화면이 안 나오고 로그만 출력됩니다. 창이 안 뜨면 `MUJOCO_GL=glfw python -m sim.run_sim`을 쓰세요.
+설정 창에서 고릅니다. 맵은 **하나개 / 월미도** 둘입니다. 파도·물때·날씨는 맵과 따로 바꿉니다.
+물때와 날씨는 월미도에서만 켜집니다. 값을 바꾸면 시뮬레이션 창만 다시 열립니다.
 
 ## 설치 (처음 한 번)
 
@@ -541,7 +542,7 @@ python -m sim.world.view_hanagae --waves
 python -m pytest tests/world/test_coast_map.py -q
 ```
 
-지면은 수면 아래까지 내려 붙여 떠 보이지 않게 했습니다. 육지 충돌 비트·밀물 수면 상승·실측 GIS는 없습니다.
+지면은 수면 아래까지 내려 붙여 떠 보이지 않게 했습니다. 얕은 바다에 물장구·개헤엄·배영·다이빙·공놀이를 하는 사람 10명을 표시합니다. 출항 직선 한가운데에는 선체 길이의 약 5배인 암초가 수면 아래부터 위까지 솟아 배의 직진을 막습니다. 육지 충돌 비트·밀물 수면 상승·실측 GIS는 없습니다.
 
 ## 잡기·착용 시연의 코드 위치
 
