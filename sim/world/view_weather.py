@@ -1,5 +1,5 @@
 """[시험용] 월미도 날씨 구조 시나리오: python -m sim.world.view_weather [--weather clear|rain|fog] [--tide high|low]
-[--speed 1.5] [--headless]
+[--speed 1.5] [--no-shadow] [--headless]
 
 view_wolmido와 같은 구조 흐름(동경 Launcher·LaunchMission)에 날씨만 더한다 (브랜치 dev/kayoung-weather, 가영 2026-11-20).
   clear  맑음: 밝은 하늘
@@ -131,12 +131,15 @@ def main():
     parser.add_argument('--tide', choices=tuple(TIDES), default='high')
     parser.add_argument('--speed', type=float, default=1.5, help='화면 재생 배속 (기본 1.5배, headless 에는 영향 없음)')
     parser.add_argument('--calm-person', action='store_true', help='사람 발버둥 끄기')
+    parser.add_argument('--no-shadow', action='store_true', help='그림자를 끔 (그래픽 카드가 없는 PC 에서 화면이 덜 끊김)')
     parser.add_argument('--headless', action='store_true')
     parser.add_argument('--timeout', type=float, default=240, help='headless 제한 시뮬레이션 시간 [초]')
     args = parser.parse_args()
     if not math.isfinite(args.speed) or args.speed <= 0:
         parser.error('--speed 는 양수여야 합니다.')
     mission, _, sky = build_weather(args.weather, args.tide, struggle=not args.calm_person)
+    if args.no_shadow:
+        mission.world.model.light_castshadow[:] = 0   # 그리기에만 쓰는 값 (물리와 무관, 동경 view_launch 와 같은 옵션)
     label = f'{args.weather}/{args.tide}'
     if args.headless:
         try:

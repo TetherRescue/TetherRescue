@@ -1,5 +1,5 @@
 """월미도 해안 구조 시나리오: python -m sim.world.view_wolmido [--env calm|waves|low_tide] [--weather clear|rain|fog]
-[--calm-person] [--speed 1.5] [--headless].
+[--calm-person] [--speed 1.5] [--no-shadow] [--headless].
 
 사람은 바다 한가운데에 구명환 없이 떠 있다. 구조 로봇(동경 A형 선체)은 구명환을 발사대에 싣고 해변 물가에서 출발해
 사람 둘레를 돌아 선미를 사람 쪽으로 두고 멈춘 뒤 구명환을 쏜다(동경 Launcher·LaunchMission). 사람이 잡으면
@@ -220,12 +220,15 @@ def main():
                         help='시작 날씨 (화면에서 F6·F7·F8로 바꿀 수 있음)')
     parser.add_argument('--calm-person', action='store_true', help='사람 허우적대기·손 흔들기 끄기')
     parser.add_argument('--speed', type=float, default=1.5, help='화면 재생 배속 (기본 1.5배, headless 에는 영향 없음)')
+    parser.add_argument('--no-shadow', action='store_true', help='그림자를 끔 (그래픽 카드가 없는 PC 에서 화면이 덜 끊김)')
     parser.add_argument('--headless', action='store_true')
     parser.add_argument('--timeout', type=float, default=240, help='headless 제한 시뮬레이션 시간 [초]')
     args = parser.parse_args()
     if not math.isfinite(args.speed) or args.speed <= 0:
         parser.error('--speed 는 양수여야 합니다.')
     mission, world_map = build_wolmido(args.env, weather=args.weather, struggle=not args.calm_person)
+    if args.no_shadow:
+        mission.world.model.light_castshadow[:] = 0   # 그리기에만 쓰는 값 (물리와 무관, 동경 view_launch 와 같은 옵션)
     if args.headless:
         try:
             print(f'[{args.env}] ' + run_headless(mission, args.timeout))
