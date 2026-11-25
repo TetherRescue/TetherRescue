@@ -1,5 +1,5 @@
 """[시험용] 월미도 날씨 구조 시나리오: python -m sim.world.view_weather [--weather clear|rain|fog] [--tide high|low]
-[--speed 2] [--headless]
+[--speed 1.5] [--headless]
 
 view_wolmido와 같은 구조 흐름(동경 Launcher·LaunchMission)에 날씨만 더한다 (브랜치 dev/kayoung-weather, 가영 2026-11-20).
   clear  맑음: 밝은 하늘
@@ -129,7 +129,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--weather', choices=tuple(WEATHERS), default='clear')
     parser.add_argument('--tide', choices=tuple(TIDES), default='high')
-    parser.add_argument('--speed', type=float, default=2., help='화면 재생 배속 (기본 2배, headless 에는 영향 없음)')
+    parser.add_argument('--speed', type=float, default=1.5, help='화면 재생 배속 (기본 1.5배, headless 에는 영향 없음)')
     parser.add_argument('--calm-person', action='store_true', help='사람 발버둥 끄기')
     parser.add_argument('--headless', action='store_true')
     parser.add_argument('--timeout', type=float, default=240, help='headless 제한 시뮬레이션 시간 [초]')

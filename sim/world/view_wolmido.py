@@ -1,9 +1,9 @@
 """월미도 해안 구조 시나리오: python -m sim.world.view_wolmido [--env calm|waves|low_tide] [--weather clear|rain|fog]
-[--calm-person] [--speed 2] [--headless].
+[--calm-person] [--speed 1.5] [--headless].
 
 사람은 바다 한가운데에 구명환 없이 떠 있다. 구조 로봇(동경 A형 선체)은 구명환을 발사대에 싣고 해변 물가에서 출발해
 사람 둘레를 돌아 선미를 사람 쪽으로 두고 멈춘 뒤 구명환을 쏜다(동경 Launcher·LaunchMission). 사람이 잡으면
-해변 쪽으로 끌고 와 물가 10m 앞에서 멈춘다. 화면은 기본 2배속으로 보여 준다 (--speed).
+해변 쪽으로 끌고 와 물가 10m 앞에서 멈춘다. 화면은 기본 1.5배속으로 보여 준다 (--speed). 2배속은 물리 계산이 못 따라간다 (2026-11-25 측정 x1.8~2.2 한계).
 환경 3개는 같은 맵에서 조건만 다르다 (config.Wolmido.ENVIRONMENTS):
   calm      만조·잔잔한 물
   waves     만조·파도(물 담당 기본 파도)
@@ -219,7 +219,7 @@ def main():
     parser.add_argument('--weather', choices=tuple(WEATHER_KEYS.values()), default='clear',
                         help='시작 날씨 (화면에서 F6·F7·F8로 바꿀 수 있음)')
     parser.add_argument('--calm-person', action='store_true', help='사람 허우적대기·손 흔들기 끄기')
-    parser.add_argument('--speed', type=float, default=2., help='화면 재생 배속 (기본 2배, headless 에는 영향 없음)')
+    parser.add_argument('--speed', type=float, default=1.5, help='화면 재생 배속 (기본 1.5배, headless 에는 영향 없음)')
     parser.add_argument('--headless', action='store_true')
     parser.add_argument('--timeout', type=float, default=240, help='headless 제한 시뮬레이션 시간 [초]')
     args = parser.parse_args()
