@@ -9,6 +9,7 @@ mujoco = pytest.importorskip('mujoco')
 from sim import config
 from sim.frames import body_velocity_w
 from sim.robot.launcher import FLYING, LOADED, PUSHING, ballistic_speed
+from sim.robot.phase_manager import Phase
 from sim.robot.robot import PAID_OUT
 from sim.world.launch_mission import build_launch_mission
 from sim.world.world import advance_world
@@ -86,6 +87,25 @@ def test_launch_mission_lands_at_hand_grabs_and_tows():
     assert mission.grab_time - mission.landing['time'] < 5
     assert state['held'] and state['tow_progress'] >= mission.settings.minimum_tow_progress
     assert mission.minimum_observed_clearance > 1.0   # 배는 사람에게 다가가지 않음
+    assert data.time - mission.grab_time < 35         # 견인 약 28 초 (속도 이득 60 일 때 46 초)
+
+
+def test_tow_uses_its_own_gain_and_reapproaches_outside_tolerance():
+    mission = build_launch_mission()
+    model, data, controller = mission.world.model, mission.world.data, mission.controller
+    mujoco.mj_forward(model, data)
+    mission._start_tow()
+    navigation = mission.approach.navigation
+    assert controller.settings.speed_gain == mission.launch.tow_speed_gain > navigation.speed_gain
+    assert controller.settings.max_force == navigation.max_force   # 힘 상한은 그대로
+    # 허용 오차 밖에서 옆으로 벗어나 멈춘 배는 (옆으로 못 가므로) 정착에 갇히지 않고 다시 다가가야 한다
+    side = data.xmat[mission.robot.body_id].reshape(3, 3)[:2, 1]
+    for offset, phase in ((navigation.position_tolerance - .05, Phase.SETTLE),
+                          (navigation.position_tolerance + .2, Phase.APPROACH)):
+        controller.target_xy[:] = data.xipos[mission.robot.body_id, :2] + offset * side
+        controller.phase = Phase.SETTLE
+        controller._update_control(0.)
+        assert controller.phase == phase
 
 
 def test_reset_reloads_launcher():

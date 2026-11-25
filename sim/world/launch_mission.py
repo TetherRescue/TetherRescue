@@ -54,6 +54,12 @@ class LaunchSettings:
     stop_tolerance: float = .4
     stop_heading_deg: float = 15.
     stop_hold_seconds: float = .2
+    # 견인 속도 제어 이득 [N/(m/s)]. 접근·정밀 정지용 60 이면 60 × 0.7 m/s = 최대 42 N 이라 사람이 0.23 m/s 로만 끌려왔다.
+    # 이유 (2026-11-25 측정, 50 m 잔잔한 물): 60 → 200 이면 견인 46 → 28 초, 사람 최대 0.23 → 0.40 m/s,
+    # 최대 장력 155 → 175 N. 힘 상한 60 N 은 그대로 (160 N 으로 올려도 거의 같은 시간, 허우적대는 사람에게서 장력만 커짐)
+    tow_speed_gain: float = 200.
+    # 견인 끝에서 배가 stop_tolerance 보다 이만큼 [m] 더 벗어나면 다시 다가간다 (아래 _start_tow)
+    tow_reapproach_margin: float = .05
 
     def __post_init__(self):
         for value in vars(self).values():
@@ -227,10 +233,12 @@ class LaunchMission:
         self._human_start = data.xpos[self.human_body, :2].copy()
         self.controller.target_xy[:] = (data.xipos[self.robot.body_id, :2]
                                         + self.settings.tow_distance * self.approach.direction)
+        # 정착(SETTLE) 중인 배는 옆으로 못 간다. 허용 오차와 재접근 반경 사이가 넓으면 (전에는 0.4 ~ 0.8 m)
+        # 그 사이에 멈춘 배가 완료도 재접근도 못 하고 시간 초과된다 → 간격을 좁혀 다시 다가가게 한다
+        tolerance = self.approach.navigation.position_tolerance
         self.controller.settings = replace(
-            self.approach.navigation, max_speed=self.settings.tow_speed,
-            capture_radius=self.approach.navigation.position_tolerance,
-            reapproach_radius=max(.5, 2 * self.approach.navigation.position_tolerance))
+            self.approach.navigation, max_speed=self.settings.tow_speed, speed_gain=self.launch.tow_speed_gain,
+            capture_radius=tolerance, reapproach_radius=tolerance + self.launch.tow_reapproach_margin)
         self.controller.reset()
         self.stage = LaunchStage.TOW
 
