@@ -315,18 +315,26 @@ def _add_beachgoers(spec, surface):
 
 
 def _add_reef(spec, surface):
-    """항로 한가운데 암초. 월미도와 같은 지형 충돌 비트라 배·사람이 통과하지 못한다."""
+    """항로 한가운데 돌섬. 기울어진 바위가 겹친 모양이고, 배·사람은 통과하지 못한다."""
     contacts = config.Contacts
     cx, cy = REEF_CENTER
-    half_z = (REEF_TOP - REEF_BOTTOM) / 2
-    spec.worldbody.add_geom(
-        name='hanagae_reef', type=mujoco.mjtGeom.mjGEOM_BOX,
-        pos=(cx, cy, surface + (REEF_BOTTOM + REEF_TOP) / 2),
-        size=(REEF_LENGTH / 2, REEF_WIDTH / 2, half_z),
-        rgba=(.42, .4, .36, 1),
-        group=config.Groups.PHYSICS, contype=contacts.ENV, conaffinity=contacts.ENV_AFFINITY,
-        solref=[.006, 1], solimp=[.95, .99, .001, .5, 2], priority=1,
+    # (dx, dy, z, rx, ry, rz, 기울기 rad, 색). z는 수면 기준. 전체 길이는 선체의 약 5배.
+    rocks = (
+        (0.0, 0.0, .15, 2.1, 1.5, 1.7, .35, (.45, .42, .38, 1)),
+        (-2.3, .7, -.35, 1.5, 1.1, 1.15, -.5, (.38, .36, .33, 1)),
+        (2.1, -.6, -.2, 1.35, 1.15, 1.05, .6, (.52, .48, .43, 1)),
+        (.4, 1.5, -.55, 1.1, .9, .85, .2, (.34, .33, .31, 1)),
+        (-.9, -1.35, -.7, 1.25, .85, .7, -.25, (.4, .38, .35, 1)),
+        (.8, .2, .85, .7, .55, .55, .4, (.58, .55, .5, 1)),
     )
+    solid = dict(group=config.Groups.PHYSICS, contype=contacts.ENV, conaffinity=contacts.ENV_AFFINITY,
+                 solref=[.006, 1], solimp=[.95, .99, .001, .5, 2], priority=1)
+    for index, (dx, dy, z, rx, ry, rz, tilt, rgba) in enumerate(rocks):
+        spec.worldbody.add_geom(
+            name=f'hanagae_reef_{index}', type=mujoco.mjtGeom.mjGEOM_ELLIPSOID,
+            pos=(cx + dx, cy + dy, surface + z), size=(rx, ry, rz),
+            quat=_axis_quat((.2, 1, .15), tilt), rgba=rgba, **solid,
+        )
 
 
 def _axis_quat(axis, angle):
