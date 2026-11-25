@@ -12,6 +12,7 @@ from sim.robot.launcher import FLYING, LOADED, PUSHING, ballistic_speed
 from sim.robot.phase_manager import Phase
 from sim.robot.robot import PAID_OUT
 from sim.world.launch_mission import build_launch_mission
+from sim.world.view_launch import COMPUTE_PER_FRAME, Playback
 from sim.world.world import advance_world
 
 
@@ -119,3 +120,30 @@ def test_reset_reloads_launcher():
     assert mission.launcher.state == LOADED and mission.stage.value == 'APPROACH'
     assert mission.robot.rope_length(mission.world.model) == pytest.approx(config.Winch.STOW_LENGTH)
     assert _mount_error(mission) < 1e-6
+
+
+def test_playback_follows_real_time_not_frame_count():
+    for frames in (60, 10):   # 화면이 느려도 (10장/초) 같은 시간만큼 진행
+        now = [0.]
+        steps = []
+        playback = Playback(2., .005, clock=lambda: now[0])
+        for _ in range(frames):
+            now[0] += 1 / frames
+            playback.advance(lambda: steps.append(1))
+        assert len(steps) * .005 == pytest.approx(2., abs=.01)   # 1초 × 배속 2
+
+
+def test_playback_drops_lag_when_compute_is_too_slow():
+    now = [0.]
+    steps = []
+
+    def slow_step():
+        now[0] += .01   # 5 ms 를 계산하는 데 10 ms
+        steps.append(1)
+
+    playback = Playback(1., .005, clock=lambda: now[0])
+    now[0] += 10.       # 크게 밀려도
+    playback.advance(slow_step)
+    assert len(steps) == math.floor(COMPUTE_PER_FRAME / .01) + 1 and playback.budget == 0
+    playback.advance(lambda: False)   # 실패한 step 은 바로 멈춤
+    assert playback.budget == 0
