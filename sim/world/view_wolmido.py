@@ -121,11 +121,28 @@ def _part(world, kind):
     return next((part for part in world.parts if isinstance(part, kind)), None)
 
 
+# 파도 수면 표시 갱신 (아래 upload_wave). viewer.update_hfield 는 렌더 한 장을 기다려서, 렌더가 무거울수록 오래 걸린다
+# (2026-11-25 WSL 소프트웨어 렌더 측정: 맑음 60~76 ms, 비·안개 약 190 ms — 반투명 안개 막이 수면 위에 겹침).
+# 매 장 부르면 화면이 4~12 장/초로 떨어져 waves 가 x1 에서도 x0.2~0.4 로 보였다.
+WAVE_INTERVAL = .2   # 최소 간격 [s]. .1 은 waves x1 이 x0.4~0.8, .2 는 x0.8~1.0
+WAVE_SHARE = .35     # 수면 올리기에 쓸 시간 몫의 상한: 간격 ≥ 한 번 걸린 시간 / WAVE_SHARE
+
+
+def upload_wave(viewer, wave, started):
+    """바뀐 수면 높이를 화면에 올리고 다음에 올릴 시각 [time.monotonic 기준 s]을 돌려준다."""
+    import time
+
+    before = time.monotonic()
+    viewer.update_hfield(wave.hfield_id)
+    return started + max(WAVE_INTERVAL, (time.monotonic() - before) / WAVE_SHARE)
+
+
 def run_viewer(mission, title, speed=1.):
     import time
     import mujoco.viewer
     from sim.world.rope_visual import draw_rope
     from sim.world.struggle import Struggle
+    from sim.world.view_launch import FRAME, TEXT_INTERVAL, Playback
     from sim.world.wave_visual import WaveSurface
     from sim.world.weather_wolmido import WolmidoWeather
 
@@ -142,7 +159,11 @@ def run_viewer(mission, title, speed=1.):
         viewer.cam.distance, viewer.cam.azimuth, viewer.cam.elevation = 16., 150., -32.
         if sky is not None:
             viewer.user_scn.flags[mujoco.mjtRndFlag.mjRND_FOG] = sky.foggy
-        frame, budget = 1 / 60, 0.
+        # 흐른 실제 시간 × 배속만큼 진행하고, 글자는 TEXT_INTERVAL 마다만 바꾼다 (동경 view_launch 의 Playback 그대로).
+        # 예전처럼 매 장 set_texts 를 부르면 WSL 에서 렌더를 기다리느라 배속보다 훨씬 느리게 보였다 (2026-11-25)
+        playback = Playback(speed, world.model.opt.timestep)
+        text_due, shown = 0., (time.monotonic(), world.data.time)
+        wave_due = 0.   # 파도 수면은 upload_wave 가 정한 간격마다만 다시 올린다
         while viewer.is_running():
             started = time.monotonic()
             texture = None
@@ -151,13 +172,9 @@ def run_viewer(mission, title, speed=1.):
                     texture = sky.apply(world.model, asked.pop())
                     asked.clear()
                     viewer.user_scn.flags[mujoco.mjtRndFlag.mjRND_FOG] = sky.foggy
+                    text_due = 0.   # 바뀐 날씨 이름을 바로 보여 준다
                 if not mission.failed and not mission.arrived:
-                    # 계산이 배속을 못 따라가면 밀린 시간은 버린다 (동경 view_launch와 같은 방식)
-                    budget = min(budget + frame * speed, 2 * frame * speed)
-                    while budget >= world.model.opt.timestep:
-                        if mission.step() is False:
-                            break
-                        budget -= world.model.opt.timestep
+                    playback.advance(mission.step)
                 viewer.cam.lookat[:] = (world.data.xpos[mission.robot.body_id] + world.data.xpos[mission.human_body]) / 2
                 viewer.user_scn.ngeom = 0   # 매 화면 줄·팔다리·빗줄기를 새로 그린다
                 draw_rope(viewer.user_scn, world.model, world.data, mission.rope)
@@ -166,25 +183,29 @@ def run_viewer(mission, title, speed=1.):
                 if sky is not None:
                     sky.draw_fog(viewer.user_scn, viewer.cam, world.data.time)
                     sky.draw_rain(viewer.user_scn, viewer.cam.lookat, world.data.time)
-                if wave is not None:
+                wave_now = wave is not None and started >= wave_due
+                if wave_now:
                     wave.update(world.model, world.data.time)
             if texture is not None:
                 viewer.update_texture(texture)   # 바뀐 하늘색을 화면에 올린다
-            if wave is not None:
-                viewer.update_hfield(wave.hfield_id)   # 바뀐 수면 높이를 화면에 올린다
-            state = mission.readings()
-            landing = state['landing']
-            status = (mission.failure.code.value if mission.failed else 'COMPLETE' if mission.arrived else state['phase'])
-            weather = '' if sky is None else 'Weather\n'
-            weather_value = '' if sky is None else f'{sky.name}  (F6 clear / F7 rain / F8 fog)\n'
-            viewer.set_texts([(mujoco.mjtFontScale.mjFONTSCALE_150, mujoco.mjtGridPos.mjGRID_TOPLEFT,
-                               f'{title} (x{speed:g})\n{weather}Phase\nTime\nLauncher\nGrip-hand gap\nLanding miss\nHeld\n'
-                               'Tension\nPerson towed',
-                               f"\n{weather_value}{status}\n{world.data.time:.1f} s\n{state['launcher']}\n{state['hand_gap']:.2f} m\n"
-                               + (f"{landing['grip_to_hand']:.2f} m" if landing else '-')
-                               + f"\n{state['held']}\n{state['tension']:.1f} N\n{state['tow_progress']:.2f} m")])
+            if wave_now:
+                wave_due = upload_wave(viewer, wave, started)
+            if started >= text_due:
+                actual = (world.data.time - shown[1]) / max(started - shown[0], 1e-9)   # 실제로 나온 배속
+                text_due, shown = started + TEXT_INTERVAL, (started, world.data.time)
+                state = mission.readings()
+                landing = state['landing']
+                status = (mission.failure.code.value if mission.failed else 'COMPLETE' if mission.arrived else state['phase'])
+                weather = '' if sky is None else 'Weather\n'
+                weather_value = '' if sky is None else f'{sky.name}  (F6 clear / F7 rain / F8 fog)\n'
+                viewer.set_texts([(mujoco.mjtFontScale.mjFONTSCALE_150, mujoco.mjtGridPos.mjGRID_TOPLEFT,
+                                   f'{title} (x{speed:g}, now x{actual:.1f})\n{weather}Phase\nTime\nLauncher\nGrip-hand gap\nLanding miss\nHeld\n'
+                                   'Tension\nPerson towed',
+                                   f"\n{weather_value}{status}\n{world.data.time:.1f} s\n{state['launcher']}\n{state['hand_gap']:.2f} m\n"
+                                   + (f"{landing['grip_to_hand']:.2f} m" if landing else '-')
+                                   + f"\n{state['held']}\n{state['tension']:.1f} N\n{state['tow_progress']:.2f} m")])
             viewer.sync()
-            time.sleep(max(0., frame - (time.monotonic() - started)))
+            time.sleep(max(0., FRAME - (time.monotonic() - started)))
 
 
 def main():

@@ -77,6 +77,8 @@ def run_viewer(mission, sky, title, speed=1.):
     import mujoco.viewer
     from sim.world.rope_visual import draw_rope
     from sim.world.struggle import Struggle
+    from sim.world.view_launch import FRAME, TEXT_INTERVAL, Playback
+    from sim.world.view_wolmido import upload_wave
     from sim.world.wave_visual import WaveSurface
 
     world = mission.world
@@ -86,16 +88,15 @@ def run_viewer(mission, sky, title, speed=1.):
         viewer.opt.geomgroup[config.Groups.PHYSICS] = 1
         viewer.cam.distance, viewer.cam.azimuth, viewer.cam.elevation = 16., 150., -32.
         viewer.user_scn.flags[mujoco.mjtRndFlag.mjRND_FOG] = sky.foggy   # 뷰어 장면에 안개 켜기
-        frame, budget = 1 / 60, 0.
+        # 재생 방식은 view_wolmido.run_viewer 와 같다: 실제 시간 × 배속만큼 진행 (동경 Playback),
+        # 글자는 TEXT_INTERVAL, 파도 수면은 upload_wave 가 정한 간격마다만 갱신 (둘 다 렌더 한 장을 기다려서 매 장 부르면 느려진다)
+        playback = Playback(speed, world.model.opt.timestep)
+        text_due, wave_due, shown = 0., 0., (time.monotonic(), world.data.time)
         while viewer.is_running():
             started = time.monotonic()
             with viewer.lock():
                 if not mission.failed and not mission.arrived:
-                    budget = min(budget + frame * speed, 2 * frame * speed)
-                    while budget >= world.model.opt.timestep:
-                        if mission.step() is False:
-                            break
-                        budget -= world.model.opt.timestep
+                    playback.advance(mission.step)
                 viewer.cam.lookat[:] = (world.data.xpos[mission.robot.body_id] + world.data.xpos[mission.human_body]) / 2
                 viewer.user_scn.ngeom = 0   # 매 화면 줄·빗줄기를 새로 그린다
                 draw_rope(viewer.user_scn, world.model, world.data, mission.rope)
@@ -103,21 +104,25 @@ def run_viewer(mission, sky, title, speed=1.):
                     struggle.draw(viewer.user_scn, world.model, world.data)
                 sky.draw_fog(viewer.user_scn, viewer.cam, world.data.time)
                 sky.draw_rain(viewer.user_scn, viewer.cam.lookat, world.data.time)
-                if wave is not None:
+                wave_now = wave is not None and started >= wave_due
+                if wave_now:
                     wave.update(world.model, world.data.time)
-            if wave is not None:
-                viewer.update_hfield(wave.hfield_id)   # 바뀐 수면 높이를 화면에 올린다
-            state = mission.readings()
-            landing = state['landing']
-            status = (mission.failure.code.value if mission.failed else 'COMPLETE' if mission.arrived else state['phase'])
-            viewer.set_texts([(mujoco.mjtFontScale.mjFONTSCALE_150, mujoco.mjtGridPos.mjGRID_TOPLEFT,
-                               f'{title} (x{speed:g})\nPhase\nTime\nLauncher\nGrip-hand gap\nLanding miss\nHeld\n'
-                               'Tension\nPerson towed',
-                               f"\n{status}\n{world.data.time:.1f} s\n{state['launcher']}\n{state['hand_gap']:.2f} m\n"
-                               + (f"{landing['grip_to_hand']:.2f} m" if landing else '-')
-                               + f"\n{state['held']}\n{state['tension']:.1f} N\n{state['tow_progress']:.2f} m")])
+            if wave_now:
+                wave_due = upload_wave(viewer, wave, started)
+            if started >= text_due:
+                actual = (world.data.time - shown[1]) / max(started - shown[0], 1e-9)   # 실제로 나온 배속
+                text_due, shown = started + TEXT_INTERVAL, (started, world.data.time)
+                state = mission.readings()
+                landing = state['landing']
+                status = (mission.failure.code.value if mission.failed else 'COMPLETE' if mission.arrived else state['phase'])
+                viewer.set_texts([(mujoco.mjtFontScale.mjFONTSCALE_150, mujoco.mjtGridPos.mjGRID_TOPLEFT,
+                                   f'{title} (x{speed:g}, now x{actual:.1f})\nPhase\nTime\nLauncher\nGrip-hand gap\n'
+                                   'Landing miss\nHeld\nTension\nPerson towed',
+                                   f"\n{status}\n{world.data.time:.1f} s\n{state['launcher']}\n{state['hand_gap']:.2f} m\n"
+                                   + (f"{landing['grip_to_hand']:.2f} m" if landing else '-')
+                                   + f"\n{state['held']}\n{state['tension']:.1f} N\n{state['tow_progress']:.2f} m")])
             viewer.sync()
-            time.sleep(max(0., frame - (time.monotonic() - started)))
+            time.sleep(max(0., FRAME - (time.monotonic() - started)))
 
 
 def main():
