@@ -9,8 +9,10 @@ mujoco = pytest.importorskip('mujoco')
 from sim import config
 from sim.frames import body_velocity_w
 from sim.robot.launcher import FLYING, LOADED, PUSHING, ballistic_speed
+from sim.robot.phase_manager import Phase
 from sim.robot.robot import PAID_OUT
 from sim.world.launch_mission import build_launch_mission
+from sim.world.view_launch import COMPUTE_PER_FRAME, Playback
 from sim.world.world import advance_world
 
 
@@ -86,6 +88,25 @@ def test_launch_mission_lands_at_hand_grabs_and_tows():
     assert mission.grab_time - mission.landing['time'] < 5
     assert state['held'] and state['tow_progress'] >= mission.settings.minimum_tow_progress
     assert mission.minimum_observed_clearance > 1.0   # 배는 사람에게 다가가지 않음
+    assert data.time - mission.grab_time < 35         # 견인 약 28 초 (속도 이득 60 일 때 46 초)
+
+
+def test_tow_uses_its_own_gain_and_reapproaches_outside_tolerance():
+    mission = build_launch_mission()
+    model, data, controller = mission.world.model, mission.world.data, mission.controller
+    mujoco.mj_forward(model, data)
+    mission._start_tow()
+    navigation = mission.approach.navigation
+    assert controller.settings.speed_gain == mission.launch.tow_speed_gain > navigation.speed_gain
+    assert controller.settings.max_force == navigation.max_force   # 힘 상한은 그대로
+    # 허용 오차 밖에서 옆으로 벗어나 멈춘 배는 (옆으로 못 가므로) 정착에 갇히지 않고 다시 다가가야 한다
+    side = data.xmat[mission.robot.body_id].reshape(3, 3)[:2, 1]
+    for offset, phase in ((navigation.position_tolerance - .05, Phase.SETTLE),
+                          (navigation.position_tolerance + .2, Phase.APPROACH)):
+        controller.target_xy[:] = data.xipos[mission.robot.body_id, :2] + offset * side
+        controller.phase = Phase.SETTLE
+        controller._update_control(0.)
+        assert controller.phase == phase
 
 
 def test_reset_reloads_launcher():
@@ -99,3 +120,30 @@ def test_reset_reloads_launcher():
     assert mission.launcher.state == LOADED and mission.stage.value == 'APPROACH'
     assert mission.robot.rope_length(mission.world.model) == pytest.approx(config.Winch.STOW_LENGTH)
     assert _mount_error(mission) < 1e-6
+
+
+def test_playback_follows_real_time_not_frame_count():
+    for frames in (60, 10):   # 화면이 느려도 (10장/초) 같은 시간만큼 진행
+        now = [0.]
+        steps = []
+        playback = Playback(2., .005, clock=lambda: now[0])
+        for _ in range(frames):
+            now[0] += 1 / frames
+            playback.advance(lambda: steps.append(1))
+        assert len(steps) * .005 == pytest.approx(2., abs=.01)   # 1초 × 배속 2
+
+
+def test_playback_drops_lag_when_compute_is_too_slow():
+    now = [0.]
+    steps = []
+
+    def slow_step():
+        now[0] += .01   # 5 ms 를 계산하는 데 10 ms
+        steps.append(1)
+
+    playback = Playback(1., .005, clock=lambda: now[0])
+    now[0] += 10.       # 크게 밀려도
+    playback.advance(slow_step)
+    assert len(steps) == math.floor(COMPUTE_PER_FRAME / .01) + 1 and playback.budget == 0
+    playback.advance(lambda: False)   # 실패한 step 은 바로 멈춤
+    assert playback.budget == 0

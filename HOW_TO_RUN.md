@@ -267,6 +267,7 @@ CLI 각도는 도, `build_rescue_demo`·`RescueApproach` API 각도는 rad입니
 
 ```bash
 python -m sim.world.view_launch --speed 3
+python -m sim.world.view_launch --no-shadow     # 화면이 끊길 때
 python -m sim.world.view_launch --headless
 python -m sim.world.view_launch --start 5 6 --yaw 180 --heading 90
 python -m pytest tests/robot/test_launcher.py -q
@@ -278,8 +279,9 @@ python -m pytest tests/robot/test_launcher.py -q
 동시에 윈치를 발사 거리 + 2 m로 풀어 날아가는 동안 줄이 당기지 않습니다. 구명환이 물에 닿으면 `GRAB`에서
 잡는 점이 손 0.45 m 안이고 느리면 사람이 잡은 것으로 보고 `TOW`로 끌고 갑니다.
 공기 저항·바람·팔 뻗는 동작은 없습니다. 착수 속력이 약 4.4 m/s라 실제로는 사람 몸에 맞지 않게 겨눠야 합니다.
-`--speed`는 화면 배속이며, 계산이 못 따라가면 실제 배속은 그보다 낮을 수 있습니다(화면 없이 약 3배가 한계).
-기본 배치(사람에게서 50m)에서 최고 약 4m/s로 다가와 약 22초에 발사하고 약 69초에 견인을 마칩니다.
+`--speed`는 화면 배속이며, 계산이 못 따라가면 실제 배속은 그보다 낮습니다. 실제 배속은 화면 왼쪽 위 `now x`에 나옵니다
+(그래픽 카드 없는 WSL에서 x1은 실제 1.0배, x3은 실제 약 1.5배).
+기본 배치(사람에게서 50m)에서 최고 약 4m/s로 다가와 약 22초에 발사하고 약 52초에 견인을 마칩니다.
 추진기 100N·접근 4.5m/s·사람 근처 1.2m/s·견인 0.7m/s는 테스트값입니다(11/23 회의에서 확정).
 
 ## 접근 → 로프 연결 → 견인 → 정지 전체 시나리오 (착용 구명환, 이전 방식)
