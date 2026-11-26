@@ -32,7 +32,7 @@ def test_terrain_matches_config_and_low_tide_raises_it(drop):
     assert data.geom_xpos[wall][2] + model.geom_size[wall][2] == pytest.approx(cfg.WALL_TOP_Z + drop)
     assert model.nv == 0 and model.nbody == 1  # 고정 지형: 질량·자유도 없음
     kinds = {name.split('_')[1] for name in world_map.geom_ids}
-    assert kinds == {'wall', 'riprap', 'boulder', 'tetrapod', 'step', 'pontoon', 'pile', 'gangway', 'moored', 'buoy',
+    assert kinds == {'wall', 'riprap', 'boulder', 'tetrapod', 'step', 'pontoon', 'pile', 'gangway', 'moored',
                      'beach'}
     assert sum('tetrapod' in name for name in world_map.geom_ids) == 4 * len(cfg.TETRAPODS)
     # 물에 뜬 폰툰·부표는 간조에도 수면 높이에 남고, 바닥에 박힌 말뚝은 지형과 함께 올라간다.
