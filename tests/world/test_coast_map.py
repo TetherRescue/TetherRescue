@@ -6,7 +6,7 @@ mujoco = pytest.importorskip('mujoco')
 
 from sim import config
 from sim.world.coast_map import (
-    REEF_LENGTH, CoastalMap, LAND_EAST, SHORE_X, VICTIM_RANGE, build_hanagae_world,
+    REEF_CENTER, REEF_LENGTH, CoastalMap, LAND_EAST, SHORE_X, VICTIM_RANGE, build_hanagae_world,
 )
 from sim.world.world import advance_world, check_geom_table
 
@@ -54,6 +54,47 @@ def test_coast_map_land_is_on_east_edge_and_victim_is_offshore():
     assert span == pytest.approx(REEF_LENGTH, abs=1.5)
     assert all((rock.contype, rock.conaffinity) == (config.Contacts.ENV, config.Contacts.ENV_AFFINITY)
                for rock in reefs)
+
+
+def test_rising_wave_splashes_instead_of_passing_through_land():
+    from sim.world.wave_impact import WaveImpact
+
+    class _Rising:
+        def eta(self, x, t, y=None):
+            return np.full(np.broadcast(np.asarray(x, float), np.asarray(0.0 if y is None else y, float)).shape, 0.2)
+
+        def rise(self, x, t, y=None):
+            return np.full(np.broadcast(np.asarray(x, float), np.asarray(0.0 if y is None else y, float)).shape, 1.0)
+
+    impact = WaveImpact(_Rising())
+    impact.update(1.0)
+    assert len(impact.drops) >= 4
+    assert len(impact.bumps) >= 1
+    surface = config.WaterParams.SURFACE_Z
+    verts = np.array([
+        [SHORE_X + 6.0, 2.0, surface + 0.25],
+        [REEF_CENTER[0], REEF_CENTER[1], surface + 0.3],
+        [-30.0, 8.0, surface + 0.1],
+    ])
+    out = impact.dress(verts, 1.0)
+    assert out[0, 0] < SHORE_X
+    assert out[0, 2] <= surface + 0.4
+    rx, ry = REEF_LENGTH / 2, 2.0
+    nx = (out[1, 0] - REEF_CENTER[0]) / rx
+    ny = (out[1, 1] - REEF_CENTER[1]) / ry
+    assert nx * nx + ny * ny == pytest.approx(1.0, abs=0.08)
+    assert out[2, 0] == pytest.approx(-30.0)
+    assert out[2, 2] == pytest.approx(surface + 0.1)
+
+
+def test_splash_sea_three_changes_height_near_the_reef():
+    from sim.water.water import wave_height
+    world, *_ = build_hanagae_world(splash_sea=True)
+    water = next(part for part in world.parts if hasattr(part, 'waves') and hasattr(part.waves, 'eta'))
+    assert water.impact is not None
+    plain = config.WaterParams.WAVES_THREE
+    x, y = REEF_CENTER[0] + 3.0, 0.0
+    assert wave_height(x, y, 1.2, water.waves) != pytest.approx(wave_height(x, y, 1.2, plain))
 
 
 def test_beachgoers_move_while_the_simulation_runs():

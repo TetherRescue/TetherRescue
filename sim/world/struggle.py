@@ -134,8 +134,13 @@ class Struggle:
         u = (x - end) / (self.PANIC_PERIOD - end)                   # 헐떡이며 치고 올라옴 → 다시 허우적
         return 1. + (self.GASP_BOOST - 1.) * math.sin(math.pi * u), 0.0
 
+    def _held(self, data):
+        return self.grasp is not None and self.grasp.is_held(data)
+
     def intensity(self, data):
-        """발버둥 세기 0~1. 잡았으면 0, 구명환이 손 가까이 오면 줄어든다."""
+        """발버둥 세기 0~1. 잡았으면 0, 구명환이 손 가까이 오면 줄어든다. 구명환이 없으면 계속 1."""
+        if self.grasp is None:
+            return 1.
         if self.grasp.is_held(data):
             return 0.
         gap = float(np.linalg.norm(data.site_xpos[self.grasp.hand_site] - data.site_xpos[self.grasp.ring_site]))
@@ -145,7 +150,7 @@ class Struggle:
     def pose_schedule(self, data):
         """(눕는 정도 0~1, 자세 유지 세기 0~1). 잡기 전 (0, 1). 잡은 뒤 LAY_SECONDS 동안 뒤로 눕고, 그 뒤로도 자세 유지
         토크를 그대로 두어 누운 채 끌려간다 (풀면 다리가 가라앉아 몸이 다시 서고 견인이 느려진다)."""
-        if not self.grasp.is_held(data):
+        if not self._held(data):
             self._held_since = None
             return 0., 1.
         if self._held_since is None:
@@ -175,7 +180,7 @@ class Struggle:
 
         k = self.intensity(data)
         lay, u = self.pose_schedule(data)
-        held = self.grasp.is_held(data)
+        held = self._held(data)
         if held:
             self._hold_head_up(model, data, acc)
         if k <= 0 and u <= 0:

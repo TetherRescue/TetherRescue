@@ -14,6 +14,11 @@ from sim import config, frames
 # ─────────────────────────────────────────────────────────────
 # 파도: 수면 높이
 # ─────────────────────────────────────────────────────────────
+def _splash_eta(waves):
+    """철썩 시험 바다(Sea)면 그 수면 높이 함수. 아니면 None."""
+    return getattr(waves, 'eta', None)
+
+
 def wave_height(x, y, t, waves=config.WaterParams.WAVES_DEFAULT):
     """(x, y) 위치, t 초에서의 수면 높이 z [m] (월드 좌표, ENU).
 
@@ -27,6 +32,9 @@ def wave_height(x, y, t, waves=config.WaterParams.WAVES_DEFAULT):
       파수 = 2π / 파장,  각진동수 = sqrt(g · 파수)  ("깊은 물" 공식)
     waves=WaterParams.WAVES_CALM(빈 튜플)이면 어디서나 수면 높이 = SURFACE_Z.
     """
+    eta = _splash_eta(waves)
+    if eta is not None:
+        return eta(x, t, y)
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
     z = np.full(np.broadcast(x, y).shape, config.WaterParams.SURFACE_Z, dtype=float)
@@ -43,6 +51,11 @@ def wave_height(x, y, t, waves=config.WaterParams.WAVES_DEFAULT):
 
 def wave_slope(x, y, t, waves=config.WaterParams.WAVES_DEFAULT):
     """수면 기울기 (∂z/∂x, ∂z/∂y) [m/m]. wave_height 를 x, y 로 미분한 값 (화면 수면의 법선 계산용)."""
+    if _splash_eta(waves) is not None:
+        step = 0.5
+        here = wave_height(x, y, t, waves)
+        return (wave_height(np.asarray(x) + step, y, t, waves) - here) / step, (
+            wave_height(x, np.asarray(y) + step, t, waves) - here) / step
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
     shape = np.broadcast(x, y).shape
@@ -570,6 +583,9 @@ SEA_RING_CORNERS = 4                        # 바깥 바다 모서리 꼭짓점 
 
 def wave_amplitude(waves):
     """파도 성분 진폭의 합 = 수면이 평균에서 오르내릴 수 있는 최대 높이 [m]."""
+    amax = getattr(waves, 'amax', None)
+    if amax is not None:
+        return float(amax)
     return float(sum(abs(amp) for amp, *_ in waves))
 
 
@@ -706,6 +722,7 @@ class Water:
         self.sea_bounds = None if sea_bounds is None else tuple(float(v) for v in sea_bounds)
         self.sea_rgba = WAVE_SURFACE_RGBA if sea_rgba is None else tuple(sea_rgba)
         self.include_boat = include_boat
+        self.impact = None   # 해안·암초 철썩 (화면 전용). 있으면 메시를 지형 밖으로 접는다.
         # 사람·구명환의 실험 부력은 명시적으로 선택한다. 선체 부력은 기본 적용.
         self.floating_bodies = tuple(floating_bodies)
         self.targets = []
@@ -752,6 +769,8 @@ class Water:
         center = np.round(np.asarray(center_xy, dtype=float) / WAVE_SURFACE_STEP) * WAVE_SURFACE_STEP
         mesh_id, vert_adr, normal_adr, rot, pos = self._wave_mesh
         verts_w, normals_w = wave_surface_mesh(center, data.time, self.waves, self.sea_bounds)
+        if self.impact is not None:
+            verts_w = self.impact.dress(verts_w, data.time)
         count = len(verts_w)
         # 월드 → 메시 좌표: v_mesh = Rᵀ (v_w − p). 행 벡터로 쓰면 (v_w − p) @ R
         model.mesh_vert[vert_adr:vert_adr + count] = (verts_w - pos) @ rot

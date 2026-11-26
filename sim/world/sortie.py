@@ -49,10 +49,11 @@ class SortieSettings:
 class RescueSortie:
     """전체 틀의 한 에피소드. GPS 입력은 생략하고 익수자 좌표를 자동으로 찍는다."""
 
-    def __init__(self, *, waves=None, settings=None):
+    def __init__(self, *, waves=None, settings=None, splash_sea=False):
         self.settings = SortieSettings() if settings is None else settings
         self.world, self.robot, self.water, self.human = build_hanagae_world(
-            waves=waves, boat_on_land=True, victim_range=self.settings.victim_range)
+            waves=waves, boat_on_land=True, victim_range=self.settings.victim_range,
+            splash_sea=splash_sea)
         self.stage = SortieStage.STOWED
         self.gps_fix = None
         self.controller = None

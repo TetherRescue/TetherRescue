@@ -6,6 +6,7 @@
 """
 
 import math
+import os
 
 import mujoco
 import numpy as np
@@ -386,21 +387,47 @@ def _set_boat_pose(world, robot, position, yaw):
     mujoco.mj_forward(world.model, world.data)
 
 
-def build_hanagae_world(*, waves=None, boat_on_land=False, victim_range=VICTIM_RANGE):
+def hanagae_splash_sea():
+    """철썩 시험의 --sea three. 해안 턱과 돌섬 반사를 포함한다."""
+    import importlib.util
+    import sys
+
+    folder = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'tools', 'splash_lab'))
+    if folder not in sys.path:
+        sys.path.insert(0, folder)
+    path = os.path.join(folder, 'splash_lab.py')
+    spec = importlib.util.spec_from_file_location('splash_lab_dyn', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    sea = module.Sea('three')
+    sea.add_wall((SHORE_X, 0.0), (-1.0, 0.0), 0.6, name='seawall')
+    sea.add_wall(REEF_CENTER, (1.0, 0.0), module.R_ROCK, half_len=REEF_LENGTH / 2,
+                 name='reef', shadowed=False)
+    sea.add_shadow(REEF_CENTER, 0.0, REEF_LENGTH / 2, REEF_WIDTH / 2)
+    return sea
+
+
+def build_hanagae_world(*, waves=None, boat_on_land=False, victim_range=VICTIM_RANGE, splash_sea=False):
     """동쪽 육지 + 서쪽 바다에 배·익수자를 조립한다."""
     from sim.robot.robot import Robot
     from sim.water.water import Water, wave_amplitude
-    from sim.world.human import Human
+    from sim.world.victim import make_victim
     from sim.world.world import build_world
 
     if waves is None:
         waves = config.WaterParams.WAVES_CALM
+    if splash_sea:
+        waves = hanagae_splash_sea()
     position, yaw = land_boat_pose() if boat_on_land else water_launch_pose()
     # Water의 50m 기본 평면은 끈다. 잔잔하면 맵이 넓은 수면 판을, 파도가 있으면 Water가 수면 전체를 한 겹으로 그린다.
     water = Water(waves=waves, surface_visual=False, wave_visual=True, sea_bounds=SEA_BOUNDS, sea_rgba=SEA_RGBA,
                   floating_bodies=[config.Names.HUMAN_BODY])
+    if splash_sea:
+        from sim.world.wave_impact import WaveImpact
+        water.impact = WaveImpact(waves)
     robot = Robot(surface_height=water.wave_height, position=position)
-    human = Human(position=victim_spawn_position(range_m=victim_range))
-    world = build_world(parts=[water, CoastalMap(wave_amplitude=wave_amplitude(waves)), robot, human])
+    # 익수자는 해안(동쪽)을 본다. 구명환은 아직 없으므로 발버둥만 켠다.
+    human, victim = make_victim(victim_spawn_position(range_m=victim_range)[:2], 0.0)
+    world = build_world(parts=[water, CoastalMap(wave_amplitude=wave_amplitude(waves)), robot, human, victim])
     _set_boat_pose(world, robot, position, yaw)
     return world, robot, water, human

@@ -467,6 +467,13 @@ class WaterParams:
         (0.05, 4.0, math.radians(30), 1.3),
         (0.02, 2.0, math.radians(-45), 2.1),
     )
+    # 철썩 시험 맵 --sea three 와 같은 파도 (너울·풍랑·잔물결). tools/splash_lab WAVES_THREE.
+    # 전체 실행(run_sim)에서 파도를 켜면 이 값을 쓴다. WAVES_DEFAULT(team)와는 별개다.
+    WAVES_THREE = (
+        (0.20, 12.0, 0.0, 0.0),
+        (0.10, 5.0, math.radians(25), 1.3),
+        (0.04, 2.0, math.radians(-40), 2.1),
+    )
 
     # 부력 계산용 복셀(작은 상자) 개수: 선체를 몸체 x·y·z 방향으로 각각 몇 칸으로 자를지.
     # 각 상자가 물에 얼마나 잠겼는지 더해서 부력을 구한다. 칸이 많을수록 정확하지만 느려진다.

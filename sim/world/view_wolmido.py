@@ -55,11 +55,10 @@ def build_wolmido(env='calm', *, weather=None, struggle=False, launch=None, watc
     from sim.robot.robot import Robot
     from sim.water.water import Water
     from sim.world.grasp import GraspSettings, HumanGrasp
-    from sim.world.human import Human
     from sim.world.launch_mission import LaunchMission, LaunchSettings
     from sim.world.lifebuoy import Lifebuoy
     from sim.world.rescue_mission import RescueMissionSettings
-    from sim.world.struggle import Struggle
+    from sim.world.victim import make_victim
     from sim.world.tether import Tether
     from sim.world.wave_visual import WaveSurface
     from sim.world.weather_wolmido import WolmidoWeather
@@ -75,19 +74,19 @@ def build_wolmido(env='calm', *, weather=None, struggle=False, launch=None, watc
     start, yaw, tow_heading, tow_distance = beach_start(world_map, setting['victim'])
     surface = config.WaterParams.SURFACE_Z
     robot = Robot(position=(*start, surface + config.Hull.HEIGHT / 2 - config.Expect.DRAFT), yaw=yaw, winch=True)
-    human = Human(position=(*setting['victim'], surface - .03), grip_sites=True)
+    grasp = HumanGrasp(settings=GraspSettings(max_distance=launch.reach, max_relative_speed=launch.grab_relative_speed))
+    human, victim = make_victim(setting['victim'], tow_heading, grasp=grasp)
     waves = getattr(config.WaterParams, setting['waves']) if wave_set is None else tuple(wave_set)
     water = Water(waves=waves, floating_bodies=[config.Names.HUMAN_BODY, config.Names.LIFEBUOY_BODY],
                   surface_visual=not waves)
     ring = Lifebuoy(grip_sites=True)
     rope = Tether(enabled=True, attached=True)
-    grasp = HumanGrasp(settings=GraspSettings(max_distance=launch.reach, max_relative_speed=launch.grab_relative_speed))
     launcher = Launcher(ring_site=grasp.ring_name)
     parts = [water, robot, human, ring, rope, grasp, launcher, world_map]
     if waves:
         parts.append(WaveSurface(waves))
     if struggle:
-        parts.append(Struggle(human, grasp, facing=tow_heading))   # 선 자세, 얼굴은 배가 오는 해변 쪽
+        parts.append(victim)
     if weather is not None:
         parts.append(WolmidoWeather(weather))
     world = build_world(parts=parts)

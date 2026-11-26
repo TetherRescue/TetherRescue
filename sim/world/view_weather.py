@@ -33,11 +33,10 @@ def build_weather(name='clear', tide='high', *, struggle=True, launch=None, watc
     from sim.robot.robot import Robot
     from sim.water.water import Water
     from sim.world.grasp import GraspSettings, HumanGrasp
-    from sim.world.human import Human
     from sim.world.launch_mission import LaunchMission, LaunchSettings
     from sim.world.lifebuoy import Lifebuoy
     from sim.world.rescue_mission import RescueMissionSettings
-    from sim.world.struggle import Struggle
+    from sim.world.victim import make_victim
     from sim.world.tether import Tether
     from sim.world.wave_visual import WaveSurface
     from sim.world.world import build_world
@@ -51,19 +50,19 @@ def build_weather(name='clear', tide='high', *, struggle=True, launch=None, watc
     start, yaw, tow_heading, tow_distance = beach_start(world_map, VICTIM)
     surface = config.WaterParams.SURFACE_Z
     robot = Robot(position=(*start, surface + config.Hull.HEIGHT / 2 - config.Expect.DRAFT), yaw=yaw, winch=True)
-    human = Human(position=(*VICTIM, surface - .03), grip_sites=True)
+    grasp = HumanGrasp(settings=GraspSettings(max_distance=launch.reach, max_relative_speed=launch.grab_relative_speed))
+    human, victim = make_victim(VICTIM, tow_heading, grasp=grasp)
     # 파도가 있으면 물 모듈의 평평한 수면 판 대신 파도 모양 수면을 그린다 (물 모듈 설정 값만 고르고 파일은 그대로).
     water = Water(waves=waves, floating_bodies=[config.Names.HUMAN_BODY, config.Names.LIFEBUOY_BODY],
                   surface_visual=not waves)
     ring = Lifebuoy(grip_sites=True)
     rope = Tether(enabled=True, attached=True)
-    grasp = HumanGrasp(settings=GraspSettings(max_distance=launch.reach, max_relative_speed=launch.grab_relative_speed))
     launcher = Launcher(ring_site=grasp.ring_name)
     parts = [water, robot, human, ring, rope, grasp, launcher, world_map, sky]
     if waves:
         parts.append(WaveSurface(waves, rgba=sky.setting['water_rgba']))
     if struggle:
-        parts.append(Struggle(human, grasp, facing=tow_heading))   # 선 자세, 얼굴은 배가 오는 해변 쪽
+        parts.append(victim)
     world = build_world(parts=parts)
     mujoco.mj_forward(world.model, world.data)
     mission = LaunchMission(world, robot, launcher, grasp, rope, tow_heading=tow_heading,
