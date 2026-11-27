@@ -26,8 +26,8 @@ _G = 9.81
 _WHITE = np.array([0.93, 0.96, 0.98], dtype=np.float32)
 
 
-def _field(fn, x, t, y):
-    return np.asarray(fn(x, t, y), dtype=float).reshape(-1)
+def _field(fn, x, y, t):
+    return np.asarray(fn(x, y, t), dtype=float).reshape(-1)
 
 
 class WaveImpact:
@@ -72,7 +72,7 @@ class WaveImpact:
             self.drops[:, 2] += self.drops[:, 5] * dt
             self.drops[:, 5] -= _G * dt
             age = t - self.drops[:, 6]
-            under = self.drops[:, 2] < _field(self.sea.eta, self.drops[:, 0], t, self.drops[:, 1]) - 0.04
+            under = self.drops[:, 2] < _field(self.sea.eta, self.drops[:, 0], self.drops[:, 1], t) - 0.04
             self.drops = self.drops[(age < self.drops[:, 7]) & ~(under & (self.drops[:, 5] < 0))]
         if len(self.foam):
             self.foam = self.foam[t - self.foam[:, 3] < self.foam[:, 4]]
@@ -80,8 +80,8 @@ class WaveImpact:
             self.bumps = self.bumps[t - self.bumps[:, 2] < BULGE_T]
         if not hasattr(self.sea, 'rise'):
             return
-        eta = _field(self.sea.eta, self.sx, t, self.sy)
-        rise = _field(self.sea.rise, self.sx, t, self.sy)
+        eta = _field(self.sea.eta, self.sx, self.sy, t)
+        rise = _field(self.sea.rise, self.sx, self.sy, t)
         ready = np.flatnonzero((rise > RISE_TH) & (eta > 0.02) & (t - self.cool > COOLDOWN))
         if len(ready) == 0:
             return
@@ -147,7 +147,7 @@ class WaveImpact:
         t = float(t)
         eye = np.eye(3).ravel()
         if len(self.foam) and scene.ngeom < scene.maxgeom:
-            z = _field(self.sea.eta, self.foam[:, 0], t, self.foam[:, 1]) + 0.03
+            z = _field(self.sea.eta, self.foam[:, 0], self.foam[:, 1], t) + 0.03
             age = (t - self.foam[:, 3]) / self.foam[:, 4]
             for i in range(len(self.foam)):
                 if scene.ngeom >= scene.maxgeom:

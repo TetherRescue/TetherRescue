@@ -7,7 +7,7 @@ import importlib
 
 import pytest
 
-MODULES = ["config", "forces", "frames", "water.water", "water.buoyancy", "robot.robot", "robot.phase_manager",
+MODULES = ["config", "forces", "frames", "water.sea", "water.water", "water.buoyancy", "robot.robot", "robot.phase_manager",
            "robot.rescue_approach", "world.world", "world.human", "world.tether", "world.watchdog",
            "world.coast_map", "world.sortie", "run_sim"]
 

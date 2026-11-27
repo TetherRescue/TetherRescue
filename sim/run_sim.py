@@ -212,13 +212,11 @@ def _apply_wave_height(session, meters):
 def _scale_part_waves(part, meters):
     base = getattr(part, '_wave_base', None)
     if base is None:
+        from sim.water.sea import Sea
         waves = part.waves
-        groups = getattr(waves, 'groups', None)
-        if groups:
-            arrays = [np.array(group[1], copy=True) for group in groups]
-            peak = float(np.max(np.abs(arrays[0]))) if arrays and arrays[0].size else 0.2
-            part._wave_base = ('sea', arrays, peak or 0.2)
-            part._wave_refs = (float(waves.a_ref), float(waves.rise_ref))
+        if isinstance(waves, Sea):
+            peak = float(np.max(np.abs(waves.groups[0][1]))) if waves.groups[0][1].size else 0.2
+            part._wave_base = ('sea', None, peak or 0.2)
         elif waves:
             peak = max(abs(amp) for amp, *_rest in waves) or 0.2
             part._wave_base = ('tuple', tuple(waves), peak)
@@ -230,12 +228,7 @@ def _scale_part_waves(part, meters):
     kind, data, peak = base
     scale = 0.0 if peak <= 0 else meters / peak
     if kind == 'sea':
-        for group, amp in zip(part.waves.groups, data):
-            group[1][:] = amp * scale
-        a_ref, rise_ref = part._wave_refs
-        part.waves.a_ref = a_ref * scale
-        part.waves.rise_ref = rise_ref * scale
-        part.waves.__dict__.pop('_cache', None)
+        part.waves.scaled(scale)
     else:
         part.waves = tuple((amp * scale, length, direction, phase) for amp, length, direction, phase in data)
 

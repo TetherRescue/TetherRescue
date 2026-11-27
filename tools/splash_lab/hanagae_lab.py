@@ -425,8 +425,8 @@ class HanagaeLab(L.SplashLab):
         eta = np.zeros(self.terrain.shape)
         rise = np.zeros(self.terrain.shape)
         if len(self._band):
-            eta.flat[self._band] = self.sea.eta(self._bx, t, self._by)
-            rise.flat[self._band] = self.sea.rise(self._bx, t, self._by)
+            eta.flat[self._band] = self.sea.eta(self._bx, self._by, t)
+            rise.flat[self._band] = self.sea.rise(self._bx, self._by, t)
         self._grid = (t, eta, rise)
         wet = self._always_wet.copy()
         wet.flat[self._band] = eta.flat[self._band] > self.terrain.flat[self._band]

@@ -134,245 +134,33 @@ WHITEWATER_RISE = 0.6     # 앞면 판정: 수면 상승 속도 > 이 비율 x �
 BREAK_SPRAY_CHANCE = 0.25 # 부서지는 선에서 낮은 물안개가 이는 비율
 
 
-# 파도 성분 = (진폭 [m], 파장 [m], 진행 방향 [rad, +x 기준], 위상 [rad])  — 본 시뮬 WaterParams.WAVES_* 와 같은 형식
-#   높이 = 진폭 · cos(파수 · (진행 방향 거리) − 각진동수 · t + 위상),  파수 = 2π/파장,  각진동수 = √(g · 파수)
-WAVES_THREE = (
-    (0.20, 12.0, math.radians(0), 0.0),      # 너울: 멀리서 온 길고 큰 파도 (주기 약 2.8 s)
-    (0.10, 5.0, math.radians(25), 1.3),      # 풍랑: 바람이 만든 중간 파도 (약 1.8 s), 비스듬히
-    (0.04, 2.0, math.radians(-40), 2.1),     # 잔물결: 짧은 물결 (약 1.1 s), 반대쪽으로 비스듬히
+# 바다 계산은 sim/water/sea.py 한 곳이다. 이 파일은 화면 시험만 담당한다.
+import sys
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+from sim import config
+from sim.water.sea import (
+    R_BEACH, R_ROCK, ROCK_DECAY, ROCK_SPREAD_DEG,
+    SHADOW_BLUR, SHADOW_EDGE, SHADOW_KEEP,
+    SHORE_GAMMA, SHORE_SWASH,
+    Sea,
 )
-WAVES_TEAM = (                               # 본 시뮬 config.WaterParams.WAVES_DEFAULT 그대로 (2026-11-25 기준)
-    (0.10, 8.0, 0.0, 0.0),
-    (0.05, 4.0, math.radians(30), 1.3),
-    (0.02, 2.0, math.radians(-45), 2.1),
-)
-# 반사 (벽)
-R_ROCK = 0.8          # 바위(수직 벽) 반사율
-R_BEACH = 0.3         # 모래사장(경사면) 반사율
-ROCK_SPREAD_DEG = 35  # 바위 반사파가 퍼지는 각 (작은 벽이라 부채꼴로 퍼짐)
-ROCK_DECAY = 8.0      # 바위 반사파가 약해지는 거리 [m]
-# 바위 뒤 그늘 (차폐 + 회절)
-SHADOW_ON = True
-# 해안: 파도는 수심 d 에서 높이(마루~골)가 SHORE_GAMMA x (d + SHORE_SWASH) 를 넘지 못함 (부서짐 한계).
-#   → 해안에 가까울수록 작아지고, 모래 높이가 SHORE_SWASH 를 넘는 곳부터는 파도가 없음 (모래 속 통과 X)
-SHORE_ON = True
-SHORE_GAMMA = 0.8      # 부서짐 한계 (파고 / 수심). 실제 바다에서 흔히 0.78
-SHORE_SWASH = 0.35     # 물이 모래를 타고 올라가는 여유 높이 [m] (클수록 해안선이 더 멀리 오르내림)
-SHADOW_EDGE = 0.15    # 바위 바로 뒤 그늘 경계의 번짐 [m]
-SHADOW_BLUR = 0.35    # 멀어질수록 경계가 번지는 정도 (√(파장 x 거리) 배)
-SHADOW_KEEP = 2.0     # 그늘이 유지되는 거리 = 이 값 x 바위 반폭 + 4 w0²/λ
-
-
-class Sea:
-    """수면 = 사인파 성분들의 합 + 벽에서 되돌아오는 반사파.
-
-    regular  : 성분 1개 (진폭 WAVE_A, 파장 WAVE_L, 주기 WAVE_T, +x 방향) — 처음 쓰던 파도
-    three    : WAVES_THREE (너울·풍랑·잔물결)
-    team     : 본 시뮬 WAVES_DEFAULT
-    irregular: Pierson–Moskowitz 스펙트럼을 N 개 주파수로 나누고 방향을 퍼뜨린 불규칙 파도.
-               Hs(유의파고) = 4√(Σaᵢ²/2), Tp(첨두 주기). 시드가 같으면 항상 같은 바다.
-
-    반사파 (add_wall): 벽 면에 거울처럼 비친 성분. 벽 위에서 입사파와 위상이 같게 맞춘다.
-      → 벽 앞에서 입사파 + 반사파 = 제자리에서 위아래로 출렁이는 정상파(clapotis).
-      벽이 짧으면(half_len) 반사파가 부채꼴로 퍼지며 약해진다: 폭 w(s) = half_len + s·tan(spread),
-      세기 ∝ √(half_len / w(s)) · exp(−s / decay)   (s = 벽에서 바다 쪽으로 잰 거리)
-    """
-
-    def __init__(self, kind="regular", hs=2 * WAVE_A, tp=WAVE_T, spread_deg=30.0, n=16, seed=0):
-        self.kind = kind
-        if kind in ("regular", "three", "team"):
-            comps = {"regular": ((WAVE_A, WAVE_L, 0.0, 0.0),), "three": WAVES_THREE, "team": WAVES_TEAM}[kind]
-            a = np.array([c[0] for c in comps])
-            k = 2 * math.pi / np.array([c[1] for c in comps])
-            th = np.array([c[2] for c in comps])
-            # regular 은 처음 쓰던 주기(WAVE_T)를 그대로, 나머지는 깊은 물 공식 ω = √(g k)
-            w = np.array([2 * math.pi / WAVE_T]) if kind == "regular" else np.sqrt(9.81 * k)
-            ph = np.array([c[3] for c in comps]) + math.pi / 2          # cos → sin 으로 바꿔 씀
-            a_ref = float(np.sqrt(np.sum(a ** 2)))                      # 판정 기준 진폭
-            rise_ref = float(np.sqrt(np.sum((a * w) ** 2)))
-        else:
-            rng = np.random.default_rng(seed)
-            fp = 1 / tp
-            edges = np.linspace(0.65 * fp, 2.6 * fp, n + 1)
-            f = 0.5 * (edges[:-1] + edges[1:]) + rng.uniform(-.3, .3, n) * np.diff(edges)   # 주파수 살짝 흔들기
-            df = np.diff(edges)
-            S = (5 / 16) * hs ** 2 * fp ** 4 * f ** -5 * np.exp(-1.25 * (fp / f) ** 4)       # PM 스펙트럼
-            a = np.sqrt(2 * S * df)
-            a *= (hs / 4) / math.sqrt(0.5 * np.sum(a ** 2))                                # Hs 맞춤
-            w = 2 * math.pi * f
-            k = w ** 2 / 9.81                                                              # 깊은 물 분산 관계
-            th = np.radians(spread_deg) * np.clip(rng.normal(0, 0.5, n), -1.5, 1.5)        # 방향 퍼짐 (+x 기준)
-            ph = rng.uniform(0, 2 * math.pi, n)
-            a_ref = hs / 2
-            rise_ref = a_ref * 2 * math.pi / tp
-        self.a_ref, self.rise_ref = a_ref, rise_ref        # "보통 파도" 진폭·상승 속도 (흰 물결 판정 기준)
-        # 그룹 = (창 함수 또는 None, 진폭, kx, ky, ω, 위상, 바위 그늘 적용 여부).  첫 그룹 = 입사파
-        self.groups = [(None, a, k * np.cos(th), k * np.sin(th), w, ph, True)]
-        self.walls = []
-        self.shadows = []          # 파도를 가리는 물체 (바위)
-        self.shores = []           # (기준점, 바다 쪽 방향, 기울기) — 얕아지는 경사 해안
-
-    def add_shore(self, point, seaward, slope):
-        """경사 해안: point 에서 수심 0, seaward 방향으로 갈수록 slope 로 깊어짐."""
-        n = np.asarray(seaward, float)
-        self.shores.append((np.asarray(point, float), n / np.linalg.norm(n), float(slope)))
-        self.__dict__.pop("_cache", None)
-
-    def _shore_factor(self, x, y):
-        """해안 감쇠 (0~1): 파고 ≤ γ(d + 여유) 가 되도록 진폭을 줄임. 깊은 곳은 1."""
-        f = np.ones(np.broadcast(x, y).shape)
-        a_sig = 1.4 * self.a_ref                           # 보통 파도의 마루 높이
-        for p, n, slope in self.shores:
-            d = slope * ((x - p[0]) * n[0] + (y - p[1]) * n[1])  # 수심 (모래 위는 음수)
-            f = np.minimum(f, np.clip(SHORE_GAMMA * (d + SHORE_SWASH) / (2 * a_sig), 0.0, 1.0))
-        return f
-
-    def add_shadow(self, center, yaw, half_x, half_y):
-        """파도를 가리는 박스(바위) 추가. 성분마다 그 진행 방향으로 뒤쪽에 그늘이 생긴다.
-
-        성분 진행 방향 d, 바위 기준 좌표 along(= d 방향 거리), lat(= 옆 방향 거리)
-          바위가 막는 반폭 w0 = hx|sin(θ−yaw)| + hy|cos(θ−yaw)|,  앞뒤 반길이 hd = hx|cos| + hy|sin|
-          b = 바위 뒷면에서 잰 거리 (along − hd, 0 이상)
-          그늘 깊이 = 앞면 이후 · 옆 범위 안 · exp(−b / L_rec)
-            옆 경계 번짐 σ = SHADOW_EDGE + SHADOW_BLUR · √(λ b)     (회절: 멀수록·파장이 길수록 번짐)
-            회복 거리 L_rec = SHADOW_KEEP · w0 + 4 w0² / λ             (짧은 파도일수록 그늘이 오래감)
-          → 그 성분의 진폭 x (1 − 그늘 깊이)
-        """
-        self.shadows.append((np.asarray(center, float), yaw, half_x, half_y))
-
-    def _shadow_factor(self, kx, ky, x, y):
-        """(성분 수, ...) 모양: 성분마다 그 위치에서 남는 진폭 비율 (1 = 그늘 없음)."""
-        sh = (-1,) + (1,) * x.ndim
-        k = np.hypot(kx, ky)
-        th = np.arctan2(ky, kx).reshape(sh)
-        lam = (2 * math.pi / k).reshape(sh)
-        F = np.ones((len(kx),) + x.shape)
-        for c, yaw, hx, hy in self.shadows:
-            rel = th - yaw
-            w0 = hx * np.abs(np.sin(rel)) + hy * np.abs(np.cos(rel))
-            hd = hx * np.abs(np.cos(rel)) + hy * np.abs(np.sin(rel))
-            dx, dy = x - c[0], y - c[1]
-            along = np.cos(th) * dx + np.sin(th) * dy
-            lat = -np.sin(th) * dx + np.cos(th) * dy
-            b = np.maximum(along - hd, 0.0)
-            sigma = SHADOW_EDGE + SHADOW_BLUR * np.sqrt(lam * b)
-            lateral = 0.5 * (1 - np.tanh((np.abs(lat) - w0) / sigma))
-            started = 0.5 * (1 + np.tanh((along + hd) / 0.1))          # 바위 앞면부터 그늘
-            recover = np.exp(-b / (SHADOW_KEEP * w0 + 4 * w0 ** 2 / lam))
-            F *= 1 - started * lateral * recover
-        return F
-
-    @property
-    def amax(self):
-        """이론상 최대 높이 (메시 범위용): 입사 진폭 합 x (1 + 반사율 합)."""
-        return float(np.sum(np.abs(self.groups[0][1]))) * (1 + sum(R for _, R in self.walls))
-
-    def add_wall(self, center, normal, R, half_len=None, spread_deg=ROCK_SPREAD_DEG, decay=ROCK_DECAY, name="wall",
-                 shadowed=True):
-        """벽 하나 추가. center: 벽 면 가운데 (x, y), normal: 벽에서 바다 쪽을 향하는 방향, R: 반사율.
-        half_len=None 이면 끝없이 긴 벽 (모래사장 해안선).
-        shadowed: 이 반사파도 바위 그늘에 가려지는지 (바위 자신이 만든 반사파는 False)."""
-        _, a, kx, ky, w, ph, _ = self.groups[0]
-        n = np.asarray(normal, float) / np.linalg.norm(normal)
-        c = np.asarray(center, float)
-        kn = kx * n[0] + ky * n[1]
-        hit = kn < 0                                   # 벽 쪽으로 오는 성분만 반사
-        if not hit.any():
-            return
-        kx_r, ky_r = kx - 2 * kn * n[0], ky - 2 * kn * n[1]
-        ph_r = ph + 2 * kn * (n @ c)                   # 벽 위에서 입사파와 같은 위상 → 벽에서 높이 (1+R) 배
-        if half_len is None:
-            window, gain = None, R
-        else:
-            t_dir = np.array([-n[1], n[0]])
-            tan_s = math.tan(math.radians(spread_deg))
-
-            def window(x, y):
-                dx, dy = x - c[0], y - c[1]
-                s = dx * n[0] + dy * n[1]              # 벽에서 바다 쪽 거리
-                u = dx * t_dir[0] + dy * t_dir[1]      # 벽 따라 거리
-                sp = np.maximum(s, 0.0)
-                width = half_len + sp * tan_s
-                lateral = 0.5 * (1 - np.tanh((np.abs(u) - width) / 0.4))
-                front = 0.5 * (1 + np.tanh((s + 0.3) / 0.1))   # 벽 면(s=0)에서는 1, 벽 안쪽 깊이 들어가면 0
-                return R * front * lateral * np.sqrt(half_len / width) * np.exp(-sp / decay)
-            gain = 1.0
-        self.groups.append((window, a[hit] * gain, kx_r[hit], ky_r[hit], w[hit], ph_r[hit], shadowed))
-        self.walls.append((name, R))
-
-    def _static(self, gi, x, y):
-        """그룹 gi 의 시간과 무관한 부분 (성분별 진폭 x 그늘 x 반사 범위). 큰 격자는 한 번만 계산해 둔다."""
-        window, a, kx, ky, _, _, shadowed = self.groups[gi]
-        key = None
-        if x.size > 1000:                                  # 수면 격자 (점 몇 개짜리 질의는 그냥 계산)
-            key = (gi, x.shape, float(x.flat[0]), float(x.flat[-1]), float(y.flat[0]), float(y.flat[-1]))
-            hit = getattr(self, "_cache", {}).get(key)
-            if hit is not None:
-                return hit
-        sh = (-1,) + (1,) * x.ndim
-        A = np.broadcast_to(a.reshape(sh), (len(a),) + x.shape)
-        if shadowed and self.shadows:
-            A = A * self._shadow_factor(kx, ky, x, y)
-        if window is not None:
-            A = A * window(x, y)
-        if self.shores:
-            A = A * self._shore_factor(x, y)
-        if key is not None:
-            self.__dict__.setdefault("_cache", {})[key] = A
-        return A
-
-    def _sum(self, x, t, y, deriv):
-        x, y = np.broadcast_arrays(np.asarray(x, float), np.asarray(0.0 if y is None else y, float))
-        sh = (-1,) + (1,) * x.ndim
-        out = np.zeros(x.shape)
-        for gi, (_, a, kx, ky, w, ph, _) in enumerate(self.groups):
-            phase = kx.reshape(sh) * x + ky.reshape(sh) * y - w.reshape(sh) * t + ph.reshape(sh)
-            A = self._static(gi, x, y)                     # (성분, ...) 진폭 — 그늘·반사 범위 포함
-            if deriv:
-                out += np.einsum("i...,i...->...", A * (-w).reshape(sh), np.cos(phase))
-            else:
-                out += np.einsum("i...,i...->...", A, np.sin(phase))
-        return out
-
-    def orbital(self, x, y, z, t):
-        """(x, y, z) 의 물 입자 속도 (u, v, w) [m/s] — 깊은 물 선형 파 이론.
-
-        성분 η = a sin θ 마다:  수평 = a ω sin θ · (진행 방향) · e^{k(z−η)},  위아래 = −a ω cos θ · e^{k(z−η)}
-        (수면에서 위아래 속도 = ∂η/∂t). 반사파·바위 그늘도 같은 진폭 계수로 반영.
-        z 가 수면보다 위면 수면 값을 쓴다 (e^{k(z−η)} ≤ 1).
-        """
-        x, y, z = (np.asarray(v, float) for v in (x, y, z))
-        depth = np.minimum(z - self.eta(x, t, y), 0.0)
-        sh = (-1,) + (1,) * x.ndim
-        u = np.zeros((3,) + x.shape)
-        for gi, (_, a, kx, ky, w, ph, _) in enumerate(self.groups):
-            k = np.hypot(kx, ky)
-            theta = kx.reshape(sh) * x + ky.reshape(sh) * y - w.reshape(sh) * t + ph.reshape(sh)
-            A = self._static(gi, x, y) * w.reshape(sh) * np.exp(k.reshape(sh) * depth)
-            horiz = A * np.sin(theta)
-            u[0] += np.sum(horiz * (kx / k).reshape(sh), axis=0)
-            u[1] += np.sum(horiz * (ky / k).reshape(sh), axis=0)
-            u[2] += np.sum(-A * np.cos(theta), axis=0)
-        return u
-
-    def eta(self, x, t, y=None):
-        return self._sum(x, t, y, False)
-
-    def rise(self, x, t, y=None):
-        return self._sum(x, t, y, True)
-
+WAVES_THREE = config.WaterParams.WAVES_THREE
+WAVES_TEAM = config.WaterParams.WAVES_DEFAULT
+SHADOW_ON = True          # 시험 맵에서 바위 그늘을 켤지
+SHORE_ON = True           # 시험 맵에서 경사 해안 감쇠를 켤지
 
 SEA = Sea()
 
 
 def wave_eta(x, t, y=None):
-    return SEA.eta(x, t, y)
+    return SEA.eta(x, 0.0 if y is None else y, t)
 
 
 def wave_grid(gx, gy, t):
     """격자 전체의 (수면 높이, 상승 속도) — [row(y), col(x)]."""
     X, Y = np.meshgrid(gx, gy)
-    return SEA.eta(X, t, Y), SEA.rise(X, t, Y)
+    return SEA.eta(X, Y, t), SEA.rise(X, Y, t)
 
 
 def parse_mode(spec):
@@ -956,7 +744,7 @@ class SplashLab:
         import sim.water.water as W
 
         # 물 모듈의 부력·노즐 판정이 묻는 수면 = 이 시험 맵 바다 (파도 3개 + 반사 + 그늘). 이 프로세스 안에서만 바뀜
-        W.wave_height = lambda x, y, t, waves=None: SEA.eta(x, t, y)
+        W.wave_height = lambda x, y, t, waves=None: SEA.eta(x, y, t)
 
         # [고친 버전] 물 저항을 "정지한 물"이 아니라 "그 자리 물 입자 속도"에 대해 계산한다.
         #   물 모듈 water_drag 는 config.WaterParams.WATER_VELOCITY_W(해류)를 빼고 계산하므로,

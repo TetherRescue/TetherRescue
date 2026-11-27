@@ -467,7 +467,7 @@ class WaterParams:
         (0.05, 4.0, math.radians(30), 1.3),
         (0.02, 2.0, math.radians(-45), 2.1),
     )
-    # 철썩 시험 맵 --sea three 와 같은 파도 (너울·풍랑·잔물결). tools/splash_lab WAVES_THREE.
+    # 너울·풍랑·잔물결. sim/water/sea.py 의 Sea('three') 가 이 값만 읽는다.
     # 전체 실행(run_sim)에서 파도를 켜면 이 값을 쓴다. WAVES_DEFAULT(team)와는 별개다.
     WAVES_THREE = (
         (0.20, 12.0, 0.0, 0.0),

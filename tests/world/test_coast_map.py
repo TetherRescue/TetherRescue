@@ -60,11 +60,11 @@ def test_rising_wave_splashes_instead_of_passing_through_land():
     from sim.world.wave_impact import WaveImpact
 
     class _Rising:
-        def eta(self, x, t, y=None):
-            return np.full(np.broadcast(np.asarray(x, float), np.asarray(0.0 if y is None else y, float)).shape, 0.2)
+        def eta(self, x, y, t):
+            return np.full(np.broadcast(np.asarray(x, float), np.asarray(y, float)).shape, 0.2)
 
-        def rise(self, x, t, y=None):
-            return np.full(np.broadcast(np.asarray(x, float), np.asarray(0.0 if y is None else y, float)).shape, 1.0)
+        def rise(self, x, y, t):
+            return np.full(np.broadcast(np.asarray(x, float), np.asarray(y, float)).shape, 1.0)
 
     impact = WaveImpact(_Rising())
     impact.update(1.0)

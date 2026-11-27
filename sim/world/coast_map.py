@@ -6,7 +6,6 @@
 """
 
 import math
-import os
 
 import mujoco
 import numpy as np
@@ -389,19 +388,11 @@ def _set_boat_pose(world, robot, position, yaw):
 
 def hanagae_splash_sea():
     """철썩 시험의 --sea three. 해안 턱과 돌섬 반사를 포함한다."""
-    import importlib.util
-    import sys
+    from sim.water.sea import R_ROCK, Sea
 
-    folder = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'tools', 'splash_lab'))
-    if folder not in sys.path:
-        sys.path.insert(0, folder)
-    path = os.path.join(folder, 'splash_lab.py')
-    spec = importlib.util.spec_from_file_location('splash_lab_dyn', path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    sea = module.Sea('three')
+    sea = Sea('three')
     sea.add_wall((SHORE_X, 0.0), (-1.0, 0.0), 0.6, name='seawall')
-    sea.add_wall(REEF_CENTER, (1.0, 0.0), module.R_ROCK, half_len=REEF_LENGTH / 2,
+    sea.add_wall(REEF_CENTER, (1.0, 0.0), R_ROCK, half_len=REEF_LENGTH / 2,
                  name='reef', shadowed=False)
     sea.add_shadow(REEF_CENTER, 0.0, REEF_LENGTH / 2, REEF_WIDTH / 2)
     return sea

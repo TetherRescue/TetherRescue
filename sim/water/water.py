@@ -9,14 +9,15 @@ import math
 import numpy as np
 
 from sim import config, frames
+from sim.water.sea import Sea
 
 
 # ─────────────────────────────────────────────────────────────
 # 파도: 수면 높이
 # ─────────────────────────────────────────────────────────────
-def _splash_eta(waves):
-    """철썩 시험 바다(Sea)면 그 수면 높이 함수. 아니면 None."""
-    return getattr(waves, 'eta', None)
+def _sea(waves):
+    """수면이 sim.water.sea.Sea 일 때만 그 계산을 쓴다."""
+    return waves if isinstance(waves, Sea) else None
 
 
 def wave_height(x, y, t, waves=config.WaterParams.WAVES_DEFAULT):
@@ -32,9 +33,10 @@ def wave_height(x, y, t, waves=config.WaterParams.WAVES_DEFAULT):
       파수 = 2π / 파장,  각진동수 = sqrt(g · 파수)  ("깊은 물" 공식)
     waves=WaterParams.WAVES_CALM(빈 튜플)이면 어디서나 수면 높이 = SURFACE_Z.
     """
-    eta = _splash_eta(waves)
-    if eta is not None:
-        return eta(x, t, y)
+    sea = _sea(waves)
+    if sea is not None:
+        height = np.asarray(sea.eta(x, y, t), dtype=float)
+        return float(height) if height.ndim == 0 else height
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
     z = np.full(np.broadcast(x, y).shape, config.WaterParams.SURFACE_Z, dtype=float)
@@ -51,7 +53,7 @@ def wave_height(x, y, t, waves=config.WaterParams.WAVES_DEFAULT):
 
 def wave_slope(x, y, t, waves=config.WaterParams.WAVES_DEFAULT):
     """수면 기울기 (∂z/∂x, ∂z/∂y) [m/m]. wave_height 를 x, y 로 미분한 값 (화면 수면의 법선 계산용)."""
-    if _splash_eta(waves) is not None:
+    if _sea(waves) is not None:
         step = 0.5
         here = wave_height(x, y, t, waves)
         return (wave_height(np.asarray(x) + step, y, t, waves) - here) / step, (
@@ -583,9 +585,8 @@ SEA_RING_CORNERS = 4                        # 바깥 바다 모서리 꼭짓점 
 
 def wave_amplitude(waves):
     """파도 성분 진폭의 합 = 수면이 평균에서 오르내릴 수 있는 최대 높이 [m]."""
-    amax = getattr(waves, 'amax', None)
-    if amax is not None:
-        return float(amax)
+    if isinstance(waves, Sea):
+        return float(waves.amax)
     return float(sum(abs(amp) for amp, *_ in waves))
 
 
