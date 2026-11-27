@@ -14,10 +14,17 @@ def test_boat_starts_on_land_then_auto_marks_victim_gps():
     assert sortie.world.data.xpos[sortie.robot.body_id, 0] > SHORE_X
     assert sortie.gps_fix is None
 
+    seen = []
     while sortie.stage == SortieStage.STOWED:
         sortie.step()
+        phase = sortie.shore.phase_name()
+        if not seen or seen[-1] != phase:
+            seen.append(phase)
+        assert np.isfinite(sortie.world.data.qpos).all()
+    assert seen == ['walk', 'spot', 'seek', 'push', 'aside']
     assert sortie.stage == SortieStage.LAUNCHING
     assert sortie.world.data.xpos[sortie.robot.body_id, 0] < SHORE_X
+    assert not sortie.world.data.warning.number.any()
 
     while sortie.stage == SortieStage.LAUNCHING:
         sortie.step()

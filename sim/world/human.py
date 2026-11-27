@@ -1,4 +1,10 @@
-"""3 세계 조립: 사람 몸 모델 (담당: 가영)."""
+"""3 세계 조립: 사람 몸 모델 (담당: 가영).
+
+익수자 강체(Human)와 화면용 사람(add_visual_human)은 같은 형상이다.
+화면용은 질량·접촉이 없고, 팔만 어깨에서 움직인다.
+"""
+
+import math
 
 import numpy as np
 
@@ -312,3 +318,96 @@ class Human:
         실험 부력·물 저항은 Water가 명시적 대상으로 선택해 적용한다. 중력을 다시 add하지 않는다.
         """
         pass
+
+
+def _mul_quat(a, b):
+    out = np.zeros(4)
+    import mujoco
+    mujoco.mju_mulQuat(out, np.asarray(a, dtype=float), np.asarray(b, dtype=float))
+    return out
+
+
+def upright_quat(facing, lean=0.0):
+    """익수자를 세운 자세. facing은 얼굴이 보는 수평 방향 [rad]. lean>0이면 앞으로 숙인다."""
+    yaw = float(facing) + math.pi
+    pitch = -math.pi / 2 + float(lean)
+    q_yaw = (math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2))
+    q_up = (math.cos(pitch / 2), 0.0, math.sin(pitch / 2), 0.0)
+    return _mul_quat(q_yaw, q_up)
+
+
+def lying_quat(heading):
+    """익수자처럼 누워 머리가 heading 쪽을 보는 자세."""
+    heading = float(heading)
+    return np.array([math.cos(heading / 2), 0.0, 0.0, math.sin(heading / 2)])
+
+
+def add_visual_human(spec, name, position, quat, *, shirt=None):
+    """익수자와 같은 사람을 화면에만 둔다. 반환값은 없음. 팔 관절 이름은 `{name}_arm_l/r`.
+
+    몸 좌표는 Human과 같다. +x 머리, +y 왼쪽, +z 얼굴. 서 있는 자세는 upright_quat.
+    """
+    import mujoco
+
+    cfg = config.Human
+    height, _mass, s, g = Human._size_scales(cfg.SIZE)
+    del height
+    skin = (0.72, 0.48, 0.32, 1)
+    shirt = skin if shirt is None else tuple(shirt)
+    trousers = (0.10, 0.14, 0.20, 1)
+    shoes = (0.055, 0.065, 0.075, 1)
+    visual = dict(group=config.Groups.VISUAL, contype=0, conaffinity=0, mass=0.0)
+    body = spec.worldbody.add_body(name=name, pos=np.asarray(position, dtype=float),
+                                   quat=np.asarray(quat, dtype=float), mocap=True)
+
+    def ellipsoid(parent, part, pos, size, color):
+        parent.add_geom(name=f'{name}_{part}', type=mujoco.mjtGeom.mjGEOM_ELLIPSOID,
+                        pos=np.asarray(pos, dtype=float), size=np.asarray(size, dtype=float),
+                        rgba=color, **visual)
+
+    def capsule(parent, part, start, end, radius, color, mass=0.0):
+        parent.add_geom(name=f'{name}_{part}', type=mujoco.mjtGeom.mjGEOM_CAPSULE,
+                        fromto=np.concatenate([start, end]), size=(radius, 0, 0),
+                        rgba=color, **dict(visual, mass=mass))
+
+    sections = np.asarray(cfg.TORSO_SECTIONS_B, dtype=float) * [s, g, g]
+    angles = np.arange(16) * 2 * np.pi / 16
+    vertices = np.array([[x, width * np.cos(angle), depth * np.sin(angle)]
+                         for x, width, depth in sections for angle in angles])
+    mesh_name = f'{name}_torso_mesh'
+    spec.add_mesh(name=mesh_name, uservert=vertices.ravel())
+    body.add_geom(name=f'{name}_torso', type=mujoco.mjtGeom.mjGEOM_MESH, meshname=mesh_name,
+                  rgba=shirt, **visual)
+    head = np.asarray(cfg.HEAD_POS_B, dtype=float) * s
+    ellipsoid(body, 'head', head, np.asarray(cfg.HEAD_RADII, dtype=float) * s, skin)
+    capsule(body, 'neck', np.array([.42, 0, 0]) * s, np.array([.51, 0, 0]) * s, .048 * g, skin)
+    ellipsoid(body, 'hair', head + np.array([.018, 0, -.018]) * s, np.array([.118, .086, .086]) * s,
+              (.07, .045, .03, 1))
+    for side in (-1, 1):
+        ellipsoid(body, f'eye_{side}', head + np.array([.024, side * .036, .091]) * s,
+                  np.array([.012, .010, .006]) * s, (.045, .035, .025, 1))
+        ellipsoid(body, f'ear_{side}', head + np.array([-.006, side * .084, .005]) * s,
+                  np.array([.024, .014, .032]) * s, skin)
+    ellipsoid(body, 'nose', head + np.array([-.005, 0, .103]) * s, np.array([.024, .016, .025]) * s, skin)
+    ellipsoid(body, 'mouth', head + np.array([-.052, 0, .089]) * s, np.array([.006, .027, .004]) * s,
+              (.34, .14, .12, 1))
+
+    for side, arm, leg, elbow_name, knee_name in (
+            ('l', cfg.ARM_L_FROMTO_B, cfg.LEG_L_FROMTO_B, 'ELBOW_L_B', 'KNEE_L_B'),
+            ('r', cfg.ARM_R_FROMTO_B, cfg.LEG_R_FROMTO_B, 'ELBOW_R_B', 'KNEE_R_B')):
+        sign = 1 if side == 'l' else -1
+        shoulder, wrist = np.asarray(arm, dtype=float) * s
+        elbow = np.asarray(getattr(cfg, elbow_name), dtype=float) * s
+        limb = body.add_body(name=f'{name}_arm_{side}', pos=shoulder)
+        # +x 축 회전: 옆으로 뻗은 팔을 앞(얼굴 쪽)으로 든다.
+        limb.add_joint(name=f'{name}_arm_{side}', type=mujoco.mjtJoint.mjJNT_HINGE, axis=(1.0, 0.0, 0.0))
+        capsule(limb, f'arm_{side}', np.zeros(3), elbow - shoulder, cfg.ARM_RADIUS * g, shirt, mass=.02)
+        capsule(limb, f'forearm_{side}', elbow - shoulder, wrist - shoulder, cfg.ARM_RADIUS * .78 * g, skin, mass=.01)
+        ellipsoid(limb, f'hand_{side}', wrist - shoulder + np.array([-.015, sign * .035, 0]) * s,
+                  np.array([.037, .065, .022]) * s, skin)
+        hip, ankle = np.asarray(leg, dtype=float) * s
+        knee = np.asarray(getattr(cfg, knee_name), dtype=float) * s
+        capsule(body, f'leg_{side}', hip, knee, cfg.LEG_RADIUS * g, trousers)
+        capsule(body, f'shin_{side}', knee, ankle, cfg.LEG_RADIUS * .70 * g, trousers)
+        ellipsoid(body, f'foot_{side}', ankle + np.array([-.040, 0, .035]) * s,
+                  np.array([.080, .045, .045]) * s, shoes)

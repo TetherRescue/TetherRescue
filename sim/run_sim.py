@@ -31,6 +31,7 @@ class SceneSetup:
     waves: bool = False
     tide: str = 'high'
     weather: str = 'clear'
+    skip_launch: bool = False
 
     def __post_init__(self):
         if self.map not in MAPS:
@@ -52,10 +53,12 @@ def main():
                         help='파도 켜고 시작 (철썩 시험의 --sea three: 너울·풍랑·잔물결)')
     parser.add_argument('--tide', choices=TIDES, default='high', help='월미도 물때')
     parser.add_argument('--weather', choices=WEATHERS, default='clear', help='월미도 날씨')
+    parser.add_argument('--skip-launch', action='store_true',
+                        help='발견 연출을 건너뛰고 배가 이미 바다에 떠 있는 상태에서 시작')
     args = parser.parse_args()
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error('--timeout은 유한한 양수여야 합니다.')
-    setup = SceneSetup(args.map, args.waves, args.tide, args.weather)
+    setup = SceneSetup(args.map, args.waves, args.tide, args.weather, args.skip_launch)
     if args.headless:
         try:
             run_headless(open_session(setup, args), args.timeout)
@@ -73,7 +76,8 @@ def open_session(setup, args):
     if setup.map == 'hanagae':
         waves = () if setup.waves else config.WaterParams.WAVES_CALM
         settings = SortieSettings(launch_delay=args.launch_delay, victim_range=args.victim_range)
-        return HanagaeSession(setup, RescueSortie(waves=waves, settings=settings, splash_sea=setup.waves))
+        return HanagaeSession(setup, RescueSortie(
+            waves=waves, settings=settings, splash_sea=setup.waves, skip_intro=setup.skip_launch))
     from sim.world.view_wolmido import build_wolmido
     waves = config.WaterParams.WAVES_THREE if setup.waves else ()
     tide = 0.0 if setup.tide == 'high' else config.Wolmido.LOW_TIDE_DROP
@@ -91,8 +95,10 @@ class HanagaeSession:
         self.title = 'HANAGAE'
         self.sortie = sortie
         self.world = sortie.world
-        self.look = sortie.world.data.xpos[sortie.robot.body_id].copy()
-        self.distance = 35.0
+        self.shore = sortie.shore
+        # 해안과 앞바다가 같이 들어오는 고정 시점. 이후에는 마우스가 바꾼 값을 덮어쓰지 않는다.
+        self.look = np.array([-40.0, 0.0, 1.0])
+        self.distance = 150.0
 
     def step(self):
         self.sortie.step()
@@ -114,6 +120,7 @@ class HanagaeSession:
             struggle.draw(viewer.user_scn, self.world.model, self.world.data)
         if impact is not None:
             impact.draw(viewer.user_scn, float(self.world.data.time))
+        self.sortie.shore.draw(viewer.user_scn)
         box = getattr(self, '_weather_box', None)
         if box is not None:
             box.draw_fog(viewer.user_scn, viewer.cam, self.world.data.time)
@@ -123,6 +130,10 @@ class HanagaeSession:
     def lines(self):
         from sim.world.coast_map import SHORE_X
         state = self.sortie.readings()
+        if not self.sortie.shore.done:
+            return (f"Now    {self.sortie.shore.label()}\n"
+                    f"Time   {state['time']:.1f} s\n"
+                    f"Boat   with the passerby")
         stage = {'STOWED': 'on the beach', 'LAUNCHING': 'entering water',
                  'TRANSIT': 'heading out', 'ARRIVED': 'at the person'}.get(state['stage'], state['stage'])
         boat = state['boat_xy'][0]
@@ -146,22 +157,40 @@ class HanagaeSession:
 
 
 class WolmidoSession:
-    speed = 2.0
-
     def __init__(self, setup, mission):
+        from sim.world.shore_call import ShoreCall
         from sim.world.weather_wolmido import WolmidoWeather
         self.setup = setup
         self.title = 'WOLMIDO'
         self.mission = mission
         self.world = mission.world
+        self.cruise = 2.0
         self.sky = next((part for part in mission.world.parts if isinstance(part, WolmidoWeather)), None)
         self.foggy = bool(self.sky and self.sky.foggy)
-        boat = self.world.data.xpos[mission.robot.body_id]
-        person = self.world.data.xpos[mission.human_body]
-        self.look = (boat + person) / 2
-        self.distance = 40.0
+        self.shore = next((part for part in mission.world.parts if isinstance(part, ShoreCall)), None)
+        if self.shore is not None and setup.skip_launch:
+            import mujoco
+            self.shore.elapsed = self.shore.duration
+            self.shore.done = True
+            self.shore.playing = False
+            self.shore.write(self.world.model, self.world.data)
+            mujoco.mj_forward(self.world.model, self.world.data)
+        elif self.shore is not None:
+            self.shore.arm(self.world, mission.robot, mission)
+        # 방파제·해변·앞바다가 같이 들어오는 고정 시점.
+        self.look = np.array([-16.0, 8.0, 1.5])
+        self.distance = 72.0
+
+    @property
+    def speed(self):
+        if self.shore is not None and not self.shore.done:
+            return 1.0
+        return self.cruise
 
     def step(self):
+        if self.shore is not None and not self.shore.done:
+            self.shore.play_step(self.world, self.mission.robot)
+            return False
         if not self.mission.failed and not self.mission.arrived:
             self.mission.step()
         return self.mission.arrived or self.mission.failed
@@ -177,6 +206,8 @@ class WolmidoSession:
         wave = next((part for part in world.parts if isinstance(part, WaveSurface)), None)
         if struggle is not None:
             struggle.draw(viewer.user_scn, world.model, world.data)
+        if self.shore is not None:
+            self.shore.draw(viewer.user_scn)
         if self.sky is not None:
             self.sky.draw_fog(viewer.user_scn, viewer.cam, world.data.time)
             self.sky.draw_rain(viewer.user_scn, viewer.cam.lookat, world.data.time)
@@ -186,6 +217,10 @@ class WolmidoSession:
         return None, None
 
     def lines(self):
+        if self.shore is not None and not self.shore.done:
+            return (f"Now    {self.shore.label()}\n"
+                    f"Time   {self.world.data.time:.1f} s\n"
+                    f"Boat   on the sand")
         state = self.mission.readings()
         status = (self.mission.failure.code.value if self.mission.failed
                   else 'COMPLETE' if self.mission.arrived else state['phase'])
@@ -576,28 +611,34 @@ def _hover(widget, text):
 def _build_panel(root, state):
     _apply_korean_font(root)
     root.configure(bg='#efeae2')
-    root.geometry('320x640')
+    root.geometry('320x720')
     setup = state['setup']
     picks = {
         'map': tk.StringVar(value=setup.map),
         'waves': tk.StringVar(value='on' if setup.waves else 'off'),
         'tide': tk.StringVar(value=setup.tide),
         'weather': tk.StringVar(value=setup.weather),
+        'skip_launch': tk.StringVar(value='skip' if setup.skip_launch else 'play'),
     }
     choices = []
 
     def chosen():
         return SceneSetup(picks['map'].get(), picks['waves'].get() == 'on',
-                          picks['tide'].get(), picks['weather'].get())
+                          picks['tide'].get(), picks['weather'].get(),
+                          picks['skip_launch'].get() == 'skip')
 
-    def group(title, key, options):
+    def group(title, key, options, on_pick=None):
         frame = tk.Frame(root, bg='#efeae2')
         caption = tk.Label(frame, text=title, anchor='w', bg='#efeae2')
         caption.pack(fill='x', padx=12, pady=(8, 2))
         _paint(caption, title, bg='#efeae2')
         for value, label, help_text in options:
-            button = tk.Button(frame, text=label, anchor='w', relief='flat', bd=0,
-                               command=lambda k=key, v=value: picks[k].set(v) or refresh())
+            def command(k=key, v=value):
+                picks[k].set(v)
+                if on_pick is not None:
+                    on_pick(v)
+                refresh()
+            button = tk.Button(frame, text=label, anchor='w', relief='flat', bd=0, command=command)
             button.pack(fill='x', padx=12, pady=2)
             _hover(button, help_text)
             choices.append((key, value, button, label))
@@ -617,8 +658,9 @@ def _build_panel(root, state):
             mark = '●  ' if selected else '○  '
             _paint(button, mark + label, bg=bg, fg=fg, pad_width=280)
         names = {'hanagae': '하나개', 'wolmido': '월미도', 'off': '잔잔', 'on': '출렁임',
-                 'high': '만조', 'low': '간조', 'clear': '맑음', 'rain': '비', 'fog': '안개'}
-        now = f"지금  {names[picks['map'].get()]}  ·  {names[picks['waves'].get()]}"
+                 'high': '만조', 'low': '간조', 'clear': '맑음', 'rain': '비', 'fog': '안개',
+                 'play': '연출', 'skip': '생략'}
+        now = f"지금  {names[picks['map'].get()]}  ·  {names[picks['waves'].get()]}  ·  {names[picks['skip_launch'].get()]}"
         if picks['map'].get() == 'wolmido':
             now += f"  ·  {names[picks['tide'].get()]}  ·  {names[picks['weather'].get()]}"
         _paint(status, now, bg='#efeae2', pad_width=280)
@@ -653,7 +695,7 @@ def _build_panel(root, state):
                          variable=variable, bg='#efeae2', highlightthickness=0, length=280)
         scale.pack(padx=12)
         _hover(scale, help_text)
-        return scale
+        return variable
 
     slider('파도 높이  0–1.5 m', 'wave_height', 0.0, 1.5, 0.05,
            '수면이 평균보다 올라가는 높이입니다. 0이면 잔잔하고, 올릴수록 물결이 커집니다.')
@@ -689,9 +731,13 @@ def _build_panel(root, state):
         weather_buttons.append((value, button, label))
     weather_row.pack(fill='x')
     paint_weather()
+    group('출항', 'skip_launch', (
+        ('play', '연출', '지나가던 사람이 익수자를 보고 배를 찾아 물가에 밀어 띄웁니다.'),
+        ('skip', '생략', '그 동작을 건너뛰고, 배가 이미 바다에 떠 있는 상태에서 시작합니다.'),
+    )).pack(fill='x')
     group('맵', 'map', (
-        ('hanagae', '하나개', '동쪽 모래사장입니다. 배는 모래에서 출발해 약 200 m 밖 사람에게 갑니다.'),
-        ('wolmido', '월미도', '섬 구조입니다. 물때는 이 맵을 고른 뒤에 아래에 나옵니다.'),
+        ('hanagae', '하나개', '동쪽 모래사장입니다. 지나가던 사람이 익수자를 보고 배를 물에 띄운 뒤, 배가 약 200 m 밖 사람에게 갑니다.'),
+        ('wolmido', '월미도', '산책로의 사람이 익수자를 보고 모래 위 배를 물에 띄운 뒤 구조를 시작합니다. 물때는 이 맵을 고른 뒤에 아래에 나옵니다.'),
     )).pack(fill='x')
     group('파도', 'waves', (
         ('off', '잔잔', '수면이 평평합니다. 해안이나 바위에 철썩이지 않습니다.'),
@@ -730,8 +776,8 @@ def _drive_viewer(viewer, session, root, state, world):
     # 처음 시점만 둔다. 이후 lookat·distance·azimuth는 마우스가 바꾼 값을 덮어쓰지 않는다.
     viewer.cam.lookat[:] = session.look
     viewer.cam.distance = session.distance
-    viewer.cam.azimuth = 120
-    viewer.cam.elevation = -25
+    viewer.cam.azimuth = 125
+    viewer.cam.elevation = -28
     # 휠 줌 한계는 맵 크기(stat.extent)의 0.01~100배다. 하나개 맵은 약 400 m라
     # 기본값이면 4 m보다 가까이 못 가고, 너무 줄이면 드래그가 거의 안 움직인다.
     # 40 m면 가장 가까이 0.4 m, 가장 멀리 4 km.

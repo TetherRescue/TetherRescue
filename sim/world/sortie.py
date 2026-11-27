@@ -1,4 +1,4 @@
-"""하나개 출항 시나리오: 육지 대기 → 출항 → 익수자 GPS 자동 표기 → 항해."""
+"""하나개 출항 시나리오: 발견 → 배를 물가에 띄움 → 익수자 GPS 자동 표기 → 항해."""
 
 from dataclasses import dataclass, field
 from enum import Enum
@@ -8,8 +8,9 @@ import numpy as np
 
 from sim.robot.phase_manager import ApproachSettings, PhaseManager
 from sim.world.coast_map import (
-    SHORE_X, VICTIM_RANGE, build_hanagae_world, land_boat_pose, water_launch_pose, _set_boat_pose,
+    SHORE_X, VICTIM_RANGE, build_hanagae_world, water_launch_pose, _set_boat_pose,
 )
+from sim.world.shore_call import ShoreCall
 
 
 class SortieStage(str, Enum):
@@ -49,7 +50,7 @@ class SortieSettings:
 class RescueSortie:
     """전체 틀의 한 에피소드. GPS 입력은 생략하고 익수자 좌표를 자동으로 찍는다."""
 
-    def __init__(self, *, waves=None, settings=None, splash_sea=False):
+    def __init__(self, *, waves=None, settings=None, splash_sea=False, skip_intro=False):
         self.settings = SortieSettings() if settings is None else settings
         self.world, self.robot, self.water, self.human = build_hanagae_world(
             waves=waves, boat_on_land=True, victim_range=self.settings.victim_range,
@@ -57,10 +58,14 @@ class RescueSortie:
         self.stage = SortieStage.STOWED
         self.gps_fix = None
         self.controller = None
-        self._stow_pos, self._stow_yaw = land_boat_pose()
+        self.shore = next((part for part in self.world.parts if isinstance(part, ShoreCall)), None)
+        if self.shore is None:
+            raise RuntimeError('육지 출항에는 발견 연출이 필요합니다.')
+        self.shore.extend_walk(self.settings.launch_delay)
         self._launch_pos, self._launch_yaw = water_launch_pose()
         self._afloat_since = None
-        self._hold_boat(self._stow_pos, self._stow_yaw)
+        if skip_intro:
+            self._skip_intro()
 
     @property
     def arrived(self):
@@ -81,17 +86,9 @@ class RescueSortie:
         return state
 
     def step(self):
-        import mujoco
-
         world = self.world
         if self.stage == SortieStage.STOWED:
-            self._hold_boat(self._stow_pos, self._stow_yaw)
-            world.acc.reset()
-            world.acc.apply(world.model, world.data)
-            mujoco.mj_step(world.model, world.data)
-            mujoco.mj_forward(world.model, world.data)
-            self._hold_boat(self._stow_pos, self._stow_yaw)
-            if world.data.time + 1e-12 >= self.settings.launch_delay:
+            if self.shore.play_step(world, self.robot):
                 self._launch()
             return True
 
@@ -113,9 +110,23 @@ class RescueSortie:
         self.controller.step()
         return True
 
+    def _skip_intro(self):
+        """발견 연출 없이, 배가 이미 물가에 떠 있는 상태에서 시작한다."""
+        import mujoco
+
+        _set_boat_pose(self.world, self.robot, self.shore.route.boat_end, self.shore.route.boat_yaw)
+        self.shore.elapsed = self.shore.duration
+        self.shore.done = True
+        self.shore.playing = False
+        self.shore.write(self.world.model, self.world.data)
+        mujoco.mj_forward(self.world.model, self.world.data)
+        self.stage = SortieStage.LAUNCHING
+        self._afloat_since = 0.0
+
     def _launch(self):
-        """발견자가 배를 물에 띄운 직후. 운반 연출은 생략하고 수면 배치로 대체한다."""
-        _set_boat_pose(self.world, self.robot, self._launch_pos, self._launch_yaw)
+        """발견 연출이 배를 물가에 둔 직후. 연출이 없으면 수면 배치로 옮긴다."""
+        if self.shore is None or not self.shore.done:
+            _set_boat_pose(self.world, self.robot, self._launch_pos, self._launch_yaw)
         self.robot.set_command(0, 0)
         self.stage = SortieStage.LAUNCHING
         self._afloat_since = float(self.world.data.time)
@@ -129,8 +140,3 @@ class RescueSortie:
         self.controller = PhaseManager(
             self.world, self.robot, victim, target_heading=heading, settings=self.settings.approach)
         self.stage = SortieStage.TRANSIT
-
-    def _hold_boat(self, position, yaw):
-        """육지 충돌이 없으므로 대기 중에는 자세를 강제한다."""
-        _set_boat_pose(self.world, self.robot, position, yaw)
-        self.robot.set_command(0, 0)

@@ -67,9 +67,6 @@ class CoastalMap:
         surface = config.WaterParams.SURFACE_Z
         y0, y1 = -SEA_HALF_Y, SEA_HALF_Y
 
-        # 파도가 있으면 갯벌 윗면을 가장 낮은 파도 골보다 1 cm 아래로 내린다 (파도 수면을 뚫고 나오지 않게)
-        drop = self.wave_amplitude + .06 if self.wave_amplitude > 0 else 0.0
-
         # 넓은 수면 (Water 기본 50m 평면 대신 맵이 표시). 파도가 있으면 Water 가 그린다
         if self.wave_amplitude <= 0:
             _visual_box(spec, name='hanagae_water_surface',
@@ -83,23 +80,14 @@ class CoastalMap:
         spec.worldbody.add_light(pos=(SHORE_X - 40, 0, 40), dir=(0, 0, -1), diffuse=(.75, .75, .75),
                                  type=mujoco.mjtLightType.mjLIGHT_DIRECTIONAL, castshadow=False)
 
-        # 해저: 수면에서 아래로 이어지게
+        # 해저: 모래 경사 서쪽 끝에서 이어진다
         _box_from_bounds(spec, name='hanagae_seabed',
                          x0=SEA_WEST, x1=SHORE_X - FLAT_WIDTH, y0=y0, y1=y1,
                          z0=surface - 4.0, z1=surface - .4,
                          rgba=(.04, .14, .22, 1))
 
-        # 갯벌(고립 구간): 해안 바로 앞, 수면 아래이지만 육지와 이어짐
-        _box_from_bounds(spec, name='hanagae_tidal_flat',
-                         x0=SHORE_X - FLAT_WIDTH, x1=SHORE_X, y0=y0, y1=y1,
-                         z0=surface - LAND_DEPTH, z1=surface - .05 - drop,
-                         rgba=(.45, .38, .22, 1))
-
-        # 모래사장: 해안선에서 내륙으로, 바닥은 수면 아래까지 내려 띄우지 않음
-        _box_from_bounds(spec, name='hanagae_beach',
-                         x0=SHORE_X, x1=SHORE_X + BEACH_WIDTH, y0=y0, y1=y1,
-                         z0=surface - LAND_DEPTH, z1=surface + .4,
-                         rgba=(.86, .78, .55, 1))
+        # 모래는 한 층. 육지 쪽 끝에서 바다 쪽으로 직선으로 내려간다.
+        _sand_slope(spec, y0=y0, y1=y1)
 
         # 내륙: 맵 동쪽 끝까지 한 덩어리
         _box_from_bounds(spec, name='hanagae_land',
@@ -215,103 +203,20 @@ _SHIRTS = (
     (.75, .22, .18, 1), (.2, .45, .75, 1), (.95, .8, .2, 1), (.15, .55, .35, 1), (.55, .25, .7, 1),
     (.9, .45, .2, 1), (.25, .7, .75, 1), (.85, .15, .4, 1), (.35, .35, .85, 1), (.7, .55, .3, 1),
 )
-_SKIN = (.86, .67, .48, 1)
-
-
-def _visual_capsule(body, name, start, end, radius, rgba, mass=0.0):
-    body.add_geom(
-        name=name, type=mujoco.mjtGeom.mjGEOM_CAPSULE, fromto=(*start, *end),
-        size=(radius, 0, 0), rgba=rgba, contype=0, conaffinity=0,
-        group=config.Groups.VISUAL, mass=mass,
-    )
-
-
-def _visual_sphere(body, name, pos, radius, rgba):
-    body.add_geom(
-        name=name, type=mujoco.mjtGeom.mjGEOM_SPHERE, pos=pos, size=(radius, 0, 0),
-        rgba=rgba, contype=0, conaffinity=0, group=config.Groups.VISUAL, mass=0,
-    )
-
-
-def _beach_pose(body, prefix, pose, scale, shirt):
-    """수면 근처 물놀이 자세. 발은 몸체 원점이고 몸통은 물 위로 조금 나온다."""
-    s = scale
-    skin = _SKIN
-
-    def cap(part, a, b, radius, color=skin):
-        _visual_capsule(body, f'{prefix}_{part}', tuple(v * s for v in a), tuple(v * s for v in b), radius * s, color)
-
-    def ball(part, pos, radius, color=skin):
-        _visual_sphere(body, f'{prefix}_{part}', tuple(v * s for v in pos), radius * s, color)
-
-    def arm(part, shoulder, tip, radius=.035, color=skin):
-        """어깨 힌지. qpos를 돌리면 헤엄·물장구가 화면에 그대로 보인다."""
-        shoulder = np.asarray(shoulder, dtype=float) * s
-        tip = np.asarray(tip, dtype=float) * s
-        limb = body.add_body(name=f'{prefix}_{part}', pos=shoulder)
-        limb.add_joint(name=f'{prefix}_{part}', type=mujoco.mjtJoint.mjJNT_HINGE, axis=(0, 1, 0))
-        _visual_capsule(limb, f'{prefix}_{part}_seg', (0, 0, 0), tip - shoulder, radius * s, color, mass=.05)
-
-    if pose == 'paddle':
-        cap('torso', (.15, 0, .15), (.7, 0, .12), .1, shirt)
-        ball('head', (0, 0, .22), .1)
-        arm('arm_l', (.2, -.12, .16), (.55, -.22, .02))
-        arm('arm_r', (.25, .12, .18), (.15, .28, .28))
-        cap('leg_l', (.6, -.08, .1), (1.05, -.12, -.05), .045)
-        cap('leg_r', (.6, .08, .1), (1.0, .16, .02), .045)
-        return
-    if pose == 'float':
-        cap('torso', (.1, 0, .12), (.65, 0, .16), .1, shirt)
-        ball('head', (-.05, 0, .24), .1)
-        arm('arm_l', (.2, -.12, .2), (.15, -.45, .18))
-        arm('arm_r', (.2, .12, .2), (.15, .45, .18))
-        cap('leg_l', (.55, -.06, .12), (.95, -.08, .08), .045)
-        cap('leg_r', (.55, .06, .12), (.95, .1, .08), .045)
-        return
-    if pose == 'dive':
-        cap('torso', (0, 0, .55), (.35, 0, .15), .1, shirt)
-        ball('head', (.5, 0, -.02), .1)
-        arm('arm_l', (.2, -.1, .35), (.45, -.08, .05))
-        arm('arm_r', (.2, .1, .35), (.45, .08, .05))
-        cap('leg_l', (-.05, -.08, .7), (-.15, -.1, 1.15), .045)
-        cap('leg_r', (-.05, .08, .7), (-.1, .12, 1.15), .045)
-        return
-    if pose == 'breast':
-        cap('torso', (.1, 0, .16), (.65, 0, .14), .1, shirt)
-        ball('head', (-.02, 0, .26), .1)
-        arm('arm_l', (.15, -.1, .2), (.4, -.28, .16))
-        arm('arm_r', (.15, .1, .2), (.4, .28, .16))
-        cap('leg_l', (.6, -.08, .12), (.85, -.2, .05), .045)
-        cap('leg_r', (.6, .08, .12), (.85, .2, .05), .045)
-        return
-    # 가슴까지 잠긴 채 물장구·발 젓기·공놀이
-    cap('leg_l', (0, -.08, .15), (.05, -.1, .75), .05)
-    cap('leg_r', (0, .08, .1), (-.08, .12, .7), .05)
-    cap('torso', (0, 0, .8), (0, 0, 1.3), .11, shirt)
-    ball('head', (0, 0, 1.48), .1)
-    if pose == 'splash':
-        arm('arm_l', (0, -.16, 1.15), (.15, -.32, .72))
-        arm('arm_r', (0, .16, 1.2), (-.05, .28, 1.45))
-    elif pose == 'ball':
-        arm('arm_l', (.05, -.14, 1.15), (.28, -.1, .95))
-        arm('arm_r', (.05, .14, 1.15), (.28, .1, .95))
-        ball('ball', (.42, 0, .9), .11, (.9, .2, .15, 1))
-    elif pose == 'wave':
-        arm('arm_l', (0, -.16, 1.15), (.1, -.3, .85))
-        arm('arm_r', (0, .14, 1.25), (.08, .18, 1.7))
-    else:  # tread
-        arm('arm_l', (0, -.16, 1.15), (-.05, -.4, 1.05))
-        arm('arm_r', (0, .16, 1.15), (.05, .4, 1.0))
+_SWIMMING = ('paddle', 'float', 'breast', 'dive')
 
 
 def _add_beachgoers(spec, surface):
-    """얕은 바다의 물놀이 10명. 익수자 Human과 이름·관절을 공유하지 않는다."""
-    for index, (x, y, yaw, pose, scale) in enumerate(_BEACHGOERS):
-        # 수평 자세는 수면에 붙이고, 선 자세는 발을 물속에 둔다.
-        z = surface - .05 if pose in ('paddle', 'float', 'breast', 'dive') else surface - 1.05
-        quat = (math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2))
-        body = spec.worldbody.add_body(name=f'hanagae_bather_{index}', pos=(x, y, z), quat=quat, mocap=True)
-        _beach_pose(body, f'hanagae_bather_{index}', pose, scale, _SHIRTS[index])
+    """얕은 바다의 물놀이 10명. 형상은 익수자와 같은 add_visual_human."""
+    from sim.world.human import add_visual_human, lying_quat, upright_quat
+
+    for index, (x, y, yaw, pose, _scale) in enumerate(_BEACHGOERS):
+        # 헤엄은 수면에 눕히고, 물장구는 발을 물속에 둔 선 자세.
+        if pose in _SWIMMING:
+            z, quat = surface - .05, lying_quat(yaw)
+        else:
+            z, quat = surface - .15, upright_quat(yaw)
+        add_visual_human(spec, f'hanagae_bather_{index}', (x, y, z), quat, shirt=_SHIRTS[index])
 
 
 def _add_reef(spec, surface):
@@ -349,6 +254,53 @@ def _quat_mul(left, right):
     return out
 
 
+def sand_top_xz():
+    """모래 경사의 육지 쪽 끝 (x, z). 잔디 윗면과 같은 높이에서 시작한다."""
+    return (SHORE_X + BEACH_WIDTH, config.WaterParams.SURFACE_Z + LAND_TOP)
+
+
+def sand_toe_z():
+    """모래 경사의 바다 쪽 끝 높이. 해저보다 깊게 들어가 사선이 이어진다."""
+    return config.WaterParams.SURFACE_Z - 2.2
+
+
+def sand_height(x):
+    """모래 윗면 높이. 동쪽 끝에서 서쪽 끝까지 한 직선이다."""
+    x_top, z_top = sand_top_xz()
+    x_toe = SHORE_X - FLAT_WIDTH
+    z_toe = sand_toe_z()
+    return z_top + (float(x) - x_top) / (x_toe - x_top) * (z_toe - z_top)
+
+
+def _sand_slope(spec, *, y0, y1):
+    """모래 한 덩어리. 윗면만 육지에서 바다로 곧게 내려가고, 속은 바닥까지 채운다."""
+    import mujoco
+
+    x_top, z_top = sand_top_xz()
+    x_toe, z_toe = SHORE_X - FLAT_WIDTH, sand_toe_z()
+    z_bot = config.WaterParams.SURFACE_Z - LAND_DEPTH
+    # 남쪽(y0) 0~3, 북쪽(y1) 4~7. 각 끝: 위·육지, 위·바다, 아래·바다, 아래·육지.
+    verts = []
+    for y in (y0, y1):
+        verts += [(x_top, y, z_top), (x_toe, y, z_toe), (x_toe, y, z_bot), (x_top, y, z_bot)]
+    # 위에서 보면 반시계. 윗면 법선이 하늘을 본다.
+    faces = [
+        (0, 4, 5), (0, 5, 1),   # 경사 윗면
+        (0, 3, 7), (0, 7, 4),   # 육지 쪽
+        (1, 5, 6), (1, 6, 2),   # 바다 쪽
+        (3, 2, 6), (3, 6, 7),   # 바닥
+        (0, 1, 2), (0, 2, 3),   # 남쪽 단면
+        (4, 7, 6), (4, 6, 5),   # 북쪽 단면
+    ]
+    spec.add_mesh(name='hanagae_beach_mesh', uservert=np.asarray(verts, dtype=float).ravel().tolist(),
+                  userface=np.asarray(faces, dtype=int).ravel().tolist(),
+                  inertia=mujoco.mjtMeshInertia.mjMESH_INERTIA_SHELL)
+    spec.worldbody.add_geom(
+        name='hanagae_beach', type=mujoco.mjtGeom.mjGEOM_MESH, meshname='hanagae_beach_mesh',
+        rgba=(.86, .78, .55, 1), contype=0, conaffinity=0, group=config.Groups.VISUAL,
+    )
+
+
 def victim_spawn_position(*, range_m=VICTIM_RANGE):
     """해안선에서 서쪽으로 range_m만큼 떨어진 수면 근처."""
     if not math.isfinite(range_m) or range_m <= 0:
@@ -357,10 +309,10 @@ def victim_spawn_position(*, range_m=VICTIM_RANGE):
 
 
 def land_boat_pose():
-    """모래사장 위 대기 위치. 바다(−x)를 본다. 육지 충돌이 없어 시나리오가 자세를 붙잡는다."""
-    beach_top = config.WaterParams.SURFACE_Z + .4
-    z = beach_top + config.Hull.HEIGHT / 2 + .05
-    return (SHORE_X + BEACH_WIDTH * .45, 0.0, z), math.pi
+    """모래 경사 위 대기 위치. 바다(−x)를 본다. 육지 충돌이 없어 시나리오가 자세를 붙잡는다."""
+    x = SHORE_X + BEACH_WIDTH * .45
+    z = sand_height(x) + config.Hull.HEIGHT / 2 + .05
+    return (x, 0.0, z), math.pi
 
 
 def water_launch_pose():
@@ -410,7 +362,7 @@ def build_hanagae_world(*, waves=None, boat_on_land=False, victim_range=VICTIM_R
     if splash_sea:
         waves = hanagae_splash_sea()
     position, yaw = land_boat_pose() if boat_on_land else water_launch_pose()
-    # Water의 50m 기본 평면은 끈다. 잔잔하면 맵이 넓은 수면 판을, 파도가 있으면 Water가 수면 전체를 한 겹으로 그린다.
+    # Water의 50m 기본 평면은 끈다. 잔잔하면 맵이 넓은 수면 판을, 파도가 있으면 Water가 배 주변 패치와 평평한 둘레를 한 겹으로 그린다.
     water = Water(waves=waves, surface_visual=False, wave_visual=True, sea_bounds=SEA_BOUNDS, sea_rgba=SEA_RGBA,
                   floating_bodies=[config.Names.HUMAN_BODY])
     if splash_sea:
@@ -418,7 +370,12 @@ def build_hanagae_world(*, waves=None, boat_on_land=False, victim_range=VICTIM_R
         water.impact = WaveImpact(waves)
     robot = Robot(surface_height=water.wave_height, position=position)
     # 익수자는 해안(동쪽)을 본다. 구명환은 아직 없으므로 발버둥만 켠다.
-    human, victim = make_victim(victim_spawn_position(range_m=victim_range)[:2], 0.0)
-    world = build_world(parts=[water, CoastalMap(wave_amplitude=wave_amplitude(waves)), robot, human, victim])
+    victim_xy = victim_spawn_position(range_m=victim_range)
+    human, victim = make_victim(victim_xy[:2], 0.0)
+    parts = [water, CoastalMap(wave_amplitude=wave_amplitude(waves)), robot, human, victim]
+    if boat_on_land:
+        from sim.world.shore_call import hanagae_shore_call
+        parts.append(hanagae_shore_call(victim_xy[:2]))
+    world = build_world(parts=parts)
     _set_boat_pose(world, robot, position, yaw)
     return world, robot, water, human

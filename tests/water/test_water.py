@@ -1114,7 +1114,7 @@ def test_wave_surface_visual_does_not_change_forces():
 
 def test_coast_map_draws_one_water_layer():
     # 해안 맵: 잔잔하면 맵의 바다 판 하나. 파도가 있으면 맵 판은 없고 물이 메시 하나(패치 + 둘레 바다)를 그린다
-    # (두 겹이면 "물 위에 물"처럼 보였다). 갯벌은 가장 낮은 골보다 아래 → 수면을 뚫고 나오지 않음
+    # (두 겹이면 "물 위에 물"처럼 보였다).
     from sim.world.coast_map import build_hanagae_world
     def water_geoms(model):
         names = (model.geom(i).name for i in range(model.ngeom))
@@ -1130,8 +1130,7 @@ def test_coast_map_draws_one_water_layer():
     assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, 'hanagae_water_surface') == -1
     # 패치와 둘레 바다가 한 메시 → 한 번의 업로드로 함께 바뀐다 (따로면 화면 반영 시점이 어긋나 테두리가 깜빡였다)
     assert water_geoms(model) == [config.Names.WAVE_SURFACE_GEOM]
-    flat = model.geom('hanagae_tidal_flat')
-    assert flat.pos[2] + flat.size[2] < WaterParams.SURFACE_Z - water.wave_amplitude(WAVES)
+    assert model.geom('hanagae_beach').id >= 0
 
 
 def _triangle_areas(verts, faces):

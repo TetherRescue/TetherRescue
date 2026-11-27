@@ -82,7 +82,9 @@ def build_wolmido(env='calm', *, weather=None, struggle=False, launch=None, watc
     ring = Lifebuoy(grip_sites=True)
     rope = Tether(enabled=True, attached=True)
     launcher = Launcher(ring_site=grasp.ring_name)
-    parts = [water, robot, human, ring, rope, grasp, launcher, world_map]
+    from sim.world.shore_call import wolmido_shore_call
+    shore = wolmido_shore_call(world_map, start, yaw, setting['victim'])
+    parts = [water, robot, human, ring, rope, grasp, launcher, world_map, shore]
     if waves:
         parts.append(WaveSurface(waves))
     if struggle:
@@ -107,7 +109,25 @@ def boat_terrain_clearance(manager, world_map):
                for a in boat for b in world_map.geom_ids.values())
 
 
+def _play_shore(mission, timeout):
+    """발견 연출이 있으면 물가에 띄울 때까지 재생한다. 없으면 바로 구조를 시작한다."""
+    from sim.world.shore_call import ShoreCall
+
+    shore = _part(mission.world, ShoreCall)
+    if shore is None or shore.done:
+        return shore
+    if not shore.playing:
+        shore.arm(mission.world, mission.robot, mission)
+    data = mission.world.data
+    while not shore.done and data.time < timeout:
+        shore.play_step(mission.world, mission.robot)
+        if data.warning.number.any() or not np.isfinite(data.qpos).all():
+            raise RuntimeError('발견 연출 중 물리 상태가 비정상입니다.')
+    return shore
+
+
 def run_headless(mission, timeout):
+    _play_shore(mission, timeout)
     data = mission.world.data
     while data.time < timeout and not mission.arrived:
         if mission.step() is False:
@@ -150,8 +170,13 @@ def run_viewer(mission, title, speed=1.):
     from sim.world.wave_visual import WaveSurface
     from sim.world.weather_wolmido import WolmidoWeather
 
+    from sim.world.shore_call import ShoreCall
+
     world = mission.world
     wave, struggle, sky = _part(world, WaveSurface), _part(world, Struggle), _part(world, WolmidoWeather)
+    shore = _part(world, ShoreCall)
+    if shore is not None and not shore.playing and not shore.done:
+        shore.arm(world, mission.robot, mission)
     asked = []   # 키 콜백(뷰어 스레드)이 넣은 날씨 이름. 화면 루프가 lock 안에서 꺼내 적용한다
 
     def on_key(key):
@@ -160,7 +185,8 @@ def run_viewer(mission, title, speed=1.):
 
     with mujoco.viewer.launch_passive(world.model, world.data, key_callback=on_key) as viewer:
         viewer.opt.geomgroup[config.Groups.PHYSICS] = 1
-        viewer.cam.distance, viewer.cam.azimuth, viewer.cam.elevation = 16., 150., -32.
+        viewer.cam.lookat[:] = (-12., 8., 1.)
+        viewer.cam.distance, viewer.cam.azimuth, viewer.cam.elevation = 55., 140., -28.
         if sky is not None:
             viewer.user_scn.flags[mujoco.mjtRndFlag.mjRND_FOG] = sky.foggy
         # 흐른 실제 시간 × 배속만큼 진행하고, 글자는 TEXT_INTERVAL 마다만 바꾼다 (동경 view_launch 의 Playback 그대로).
@@ -168,6 +194,12 @@ def run_viewer(mission, title, speed=1.):
         playback = Playback(speed, world.model.opt.timestep)
         text_due, shown = 0., (time.monotonic(), world.data.time)
         wave_due = 0.   # 파도 수면은 upload_wave 가 정한 간격마다만 다시 올린다
+        def step_once():
+            if shore is not None and not shore.done:
+                shore.play_step(world, mission.robot)
+                return True
+            return mission.step()
+
         while viewer.is_running():
             started = time.monotonic()
             texture = None
@@ -178,10 +210,11 @@ def run_viewer(mission, title, speed=1.):
                     viewer.user_scn.flags[mujoco.mjtRndFlag.mjRND_FOG] = sky.foggy
                     text_due = 0.   # 바뀐 날씨 이름을 바로 보여 준다
                 if not mission.failed and not mission.arrived:
-                    playback.advance(mission.step)
-                viewer.cam.lookat[:] = (world.data.xpos[mission.robot.body_id] + world.data.xpos[mission.human_body]) / 2
+                    playback.advance(step_once)
                 viewer.user_scn.ngeom = 0   # 매 화면 줄·팔다리·빗줄기를 새로 그린다
                 draw_rope(viewer.user_scn, world.model, world.data, mission.rope)
+                if shore is not None:
+                    shore.draw(viewer.user_scn)
                 if struggle is not None:
                     struggle.draw(viewer.user_scn, world.model, world.data)
                 if sky is not None:
@@ -199,7 +232,10 @@ def run_viewer(mission, title, speed=1.):
                 text_due, shown = started + TEXT_INTERVAL, (started, world.data.time)
                 state = mission.readings()
                 landing = state['landing']
-                status = (mission.failure.code.value if mission.failed else 'COMPLETE' if mission.arrived else state['phase'])
+                if shore is not None and not shore.done:
+                    status = shore.label()
+                else:
+                    status = (mission.failure.code.value if mission.failed else 'COMPLETE' if mission.arrived else state['phase'])
                 weather = '' if sky is None else 'Weather\n'
                 weather_value = '' if sky is None else f'{sky.name}  (F6 clear / F7 rain / F8 fog)\n'
                 viewer.set_texts([(mujoco.mjtFontScale.mjFONTSCALE_150, mujoco.mjtGridPos.mjGRID_TOPLEFT,
@@ -221,7 +257,7 @@ def main():
     parser.add_argument('--speed', type=float, default=1.5, help='화면 재생 배속 (기본 1.5배, headless 에는 영향 없음)')
     parser.add_argument('--no-shadow', action='store_true', help='그림자를 끔 (그래픽 카드가 없는 PC 에서 화면이 덜 끊김)')
     parser.add_argument('--headless', action='store_true')
-    parser.add_argument('--timeout', type=float, default=240, help='headless 제한 시뮬레이션 시간 [초]')
+    parser.add_argument('--timeout', type=float, default=280, help='headless 제한 시뮬레이션 시간 [초]')
     args = parser.parse_args()
     if not math.isfinite(args.speed) or args.speed <= 0:
         parser.error('--speed 는 양수여야 합니다.')

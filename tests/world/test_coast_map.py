@@ -15,16 +15,26 @@ def test_coast_map_land_is_on_east_edge_and_victim_is_offshore():
     world, robot, water, human = build_hanagae_world()
     check_geom_table(world.model)
     names = {world.model.geom(i).name for i in range(world.model.ngeom)}
-    for required in ('hanagae_seabed', 'hanagae_tidal_flat', 'hanagae_beach',
+    for required in ('hanagae_seabed', 'hanagae_beach',
                      'hanagae_land', 'hanagae_road', 'hanagae_water_surface',
                      config.Names.HULL_GEOM):
         assert required in names
+    assert 'hanagae_tidal_flat' not in names  # 모래는 갯벌·해변이 아니라 한 경사
     assert config.Names.WATER_SURFACE_GEOM not in names  # Water 기본 50m 평면은 끔
 
+    from sim.world.coast_map import BEACH_WIDTH, FLAT_WIDTH, sand_height
     land = world.model.geom('hanagae_land').id
     beach = world.model.geom('hanagae_beach').id
-    # 육지는 해안보다 동쪽, 맵 동쪽 끝까지 닿는다
-    assert world.model.geom_pos[land, 0] > world.model.geom_pos[beach, 0] > 0
+    # 육지는 모래보다 동쪽, 맵 동쪽 끝까지 닿는다.
+    assert world.model.geom_pos[land, 0] > SHORE_X
+    assert world.model.geom_pos[land, 0] > world.model.geom_pos[beach, 0]
+    # 모래 윗면은 육지 쪽이 높고 바다 쪽이 낮은 한 직선이다.
+    east = sand_height(SHORE_X + BEACH_WIDTH)
+    shore = sand_height(SHORE_X)
+    west = sand_height(SHORE_X - FLAT_WIDTH)
+    assert east > shore > west
+    assert shore == pytest.approx(east + (west - east) * BEACH_WIDTH / (BEACH_WIDTH + FLAT_WIDTH))
+    assert int(world.model.geom_type[beach]) == int(mujoco.mjtGeom.mjGEOM_MESH)
     land_east = world.model.geom_pos[land, 0] + world.model.geom_size[land, 0]
     assert land_east == pytest.approx(LAND_EAST)
     # 지면 바닥이 수면 아래라 떠 보이지 않는다
