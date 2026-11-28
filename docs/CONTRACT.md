@@ -216,7 +216,8 @@ small은 ANSUR II 여성 하위 5%(152.5cm·51.3kg), large는 남성 상위 5%(1
 - `set_command(forward, steering)`은 각각 계약 범위의 유한한 입력을 받으며,
   좌=전진−조향 / 우=전진+조향을 혼합 후 포화합니다. 전진·후진 최대값은 각각의 계약값을 사용합니다.
 - 추력은 몸체 +x에서 월드로 변환하고 실제 추진기 site에 `acc.add`합니다.
-  `WaterAPI.USE_IN_WEEK1=False`에 따라 수면 연동은 하지 않습니다.
+  당시 `WaterAPI.USE_IN_WEEK1=False`에 따라 수면 연동은 하지 않았습니다.
+  2026-11-20부터 `build_world`가 물의 `wave_height`를 로봇에 넘겨 연동합니다 (`WaterAPI.LINKED=True`, `SHARED_STATE="function"`).
 - 최신 main의 선체·추진기·질량 속성을 유지합니다. 기본 선미 연결점은 합의된 Hull.TOW_POINT_B입니다.
   Robot(position=..., tow_point_b=...)는 기존 독립 시험의 명시적 배치를 위한 호환 옵션입니다.
 - `view_towing --dry`는 중력 0에서 실제 움직이는 배와 구명환을 tendon으로 연결합니다.

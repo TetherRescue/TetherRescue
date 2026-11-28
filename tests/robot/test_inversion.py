@@ -14,7 +14,7 @@ from sim.world.world import advance_world, build_world
 
 
 def _world(roll_deg=0.0):
-    """잔잔한 물 + 노즐 수면 판정을 켠 배. roll_deg 만큼 기울여 띄운다 (뒤집으면 원점이 거울 자리에 오도록)."""
+    """잔잔한 물 + 흡입구 수면 판정을 켠 배. roll_deg 만큼 기울여 띄운다 (뒤집으면 원점이 거울 자리에 오도록)."""
     water = Water(waves=())
     robot = Robot(surface_height=water.wave_height)
     world = build_world(parts=[water, robot])
@@ -55,7 +55,7 @@ def test_inversion_has_hysteresis_around_ninety_degrees():
 
 @pytest.mark.parametrize('roll', [0, 180])
 def test_forward_and_left_turn_work_both_ways_up(roll):
-    # 뒤집혀도 노즐이 물속이라 추력이 나오고, 전진은 세상 앞(+x), 조향 + 는 세상 왼쪽(요 각속도 +)
+    # 뒤집혀도 흡입구가 물속이라 추력이 나오고, 전진은 세상 앞(+x), 조향 + 는 세상 왼쪽(요 각속도 +)
     world, robot = _world(roll)
     robot.set_command(forward=1.)
     _run(world, 2.)

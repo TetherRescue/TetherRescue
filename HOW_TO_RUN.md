@@ -558,7 +558,7 @@ python -m pytest tests/world/test_coast_map.py -q
 
 ## 최신 main 배 모델 통합
 
-동경님의 EMILY 기반 선체·부품 질량/COM/관성·50N/20N 추진기·노즐 수면 판정을 유지합니다.
+EMILY 기반 선체·부품 질량/COM/관성·50N/20N 추진기·흡입구 판정 유지합니다.
 `Robot(surface_height=None, *, position=None, tow_point_b=None)`에서 기본 배치는 정수 흘수이며
 `position`·`tow_point_b`는 독립 시험에만 명시적으로 바꿉니다. 명령은 기존 `throttle/steer`와
 시연의 `forward/steering` 키워드를 모두 지원하고, 유한한 범위 밖 명령은 main 계약대로 포화합니다.

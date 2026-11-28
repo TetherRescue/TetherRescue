@@ -20,7 +20,7 @@ from sim.world.view_rescue import build_rescue_demo, build_rescue_mission
 from sim.world.view_towing import build_surface_towing_world
 
 
-def measure(case, nozzle_cutoff=True):
+def measure(case, intake_cutoff=True):
     waves = config.WaterParams.WAVES_DEFAULT if case.startswith('waves') else ()
     manager = None
     tow_human = tow_rope = None
@@ -28,13 +28,13 @@ def measure(case, nozzle_cutoff=True):
         water = Water(waves=waves)
         robot = Robot()
         world = build_world(parts=[water, robot])   # 조립 때 수면 함수가 자동 연결됨 → 끔 비교는 아래에서 덮어씀
-        robot.surface_height = water.wave_height if nozzle_cutoff else None
+        robot.surface_height = water.wave_height if intake_cutoff else None
         limit = 30.
     elif case == 'waves_towing':
         world, robot, tow_human, tow_rope = build_surface_towing_world()
         water = next(p for p in world.parts if isinstance(p, Water))
         water.waves = waves
-        robot.surface_height = water.wave_height if nozzle_cutoff else None
+        robot.surface_height = water.wave_height if intake_cutoff else None
         human_start = world.data.xpos[tow_human.body_id].copy()
         limit = 30.
     else:
@@ -43,21 +43,21 @@ def measure(case, nozzle_cutoff=True):
         world, robot = manager.world, manager.robot
         water = next(p for p in world.parts if isinstance(p, Water))
         water.waves = waves
-        robot.surface_height = water.wave_height if nozzle_cutoff else None
+        robot.surface_height = water.wave_height if intake_cutoff else None
         limit = 240. if case.endswith('mission') else 180.
     result = dict(case=case, timestep_s=world.model.opt.timestep,
-                  waves=waves, nozzle_cutoff=nozzle_cutoff, samples=0,
+                  waves=waves, intake_cutoff=intake_cutoff, samples=0,
                   max_tilt_deg=0., max_abs_vz_m_s=0., max_tension_N=0.,
-                  min_nozzle_depth_m=[math.inf, math.inf],
+                  min_intake_depth_m=[math.inf, math.inf],
                   dry_counts=[0, 0], stages=[])
     done_since = None
     reason = None
     try:
         while world.data.time < limit:
-            positions = world.data.site_xpos[[robot.thr_l_site_id, robot.thr_r_site_id]]
+            positions = robot.intake_points_w(world.data)
             depth = water.wave_height(positions[:, 0], positions[:, 1], world.data.time) - positions[:, 2]
             result['samples'] += 1
-            result['min_nozzle_depth_m'] = np.minimum(result['min_nozzle_depth_m'], depth).tolist()
+            result['min_intake_depth_m'] = np.minimum(result['min_intake_depth_m'], depth).tolist()
             result['dry_counts'] = (np.asarray(result['dry_counts']) + (depth <= 0)).tolist()
             if manager is None:
                 if case == 'waves_boat':
@@ -129,7 +129,7 @@ def main():
     args = parser.parse_args()
     results = []
     for case in cases if args.case == 'all' else (args.case,):
-        result = measure(case, nozzle_cutoff=not args.no_cutoff)
+        result = measure(case, intake_cutoff=not args.no_cutoff)
         results.append(result)
         print(json.dumps(result, ensure_ascii=False,
                          default=lambda v: v.tolist() if isinstance(v, np.ndarray)
